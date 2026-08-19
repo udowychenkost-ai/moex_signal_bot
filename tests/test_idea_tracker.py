@@ -105,6 +105,23 @@ def test_expiry_precedes_price_events_after_deadline() -> None:
     assert transitions[0].to_status == IdeaStatus.EXPIRED
 
 
+def test_candle_straddling_expiry_cannot_claim_post_deadline_target() -> None:
+    expires = NOW + timedelta(hours=1)
+    transitions = evaluate_idea_candle(
+        trackable(status=IdeaStatus.ACTIVE, expires_at=expires),
+        candle(
+            opened=100,
+            high=110,
+            low=99,
+            close=108,
+            begin=expires - timedelta(minutes=10),
+        ),
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].to_status == IdeaStatus.EXPIRED
+
+
 @pytest.mark.asyncio
 async def test_tracker_persists_activation_once_and_advances_progress() -> None:
     engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")

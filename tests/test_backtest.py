@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -9,11 +10,15 @@ import pytest
 from app.backtest import (
     BacktestEngine,
     BacktestTrade,
+    available_history,
     calculate_backtest_metrics,
 )
 from app.config import Settings
-from app.domain import IdeaHorizon
+from app.domain import IdeaHorizon, IdeaStatus
+from app.ideas import build_trading_idea
+from app.signals import build_signal
 from tests.test_extended_analysis import make_candles
+from tests.test_ideas import NOW, signal
 
 
 def trade(*, net_pnl: float, return_pct: float, r_multiple: float) -> BacktestTrade:
@@ -63,6 +68,10 @@ def test_backtest_metrics_include_risk_and_drawdown_statistics() -> None:
     assert metrics.profit_factor == pytest.approx(2)
     assert metrics.maximum_drawdown_pct == pytest.approx(50 / 1100 * 100)
     assert math.isfinite(metrics.sharpe_ratio)
+    assert metrics.gross_pnl == pytest.approx(60)
+    assert metrics.commission == pytest.approx(10)
+    assert metrics.slippage == 0
+    assert metrics.net_pnl == pytest.approx(50)
 
 
 def _history(count: int = 250) -> list[SimpleNamespace]:
@@ -114,7 +123,105 @@ def test_backtest_runs_the_production_signal_and_idea_pipeline() -> None:
         "direction",
         "sector",
         "confidence_bucket",
+        "calendar_year",
     }
     assert result.breakdowns["ticker"]["SBER"]["ideas"] == result.metrics.idea_count
     assert all(item.units % 10 == 0 for item in result.trades)
     assert all(item.commission >= 0 for item in result.trades)
+    assert all(item.slippage >= 0 for item in result.trades)
+
+
+def test_history_at_decision_excludes_unfinished_and_future_candles() -> None:
+    history = _history(80)
+    decision_at = history[59].end
+
+    available = available_history(history, decision_at)
+
+    assert available == history[:60]
+    assert all(candle.end <= decision_at for candle in available)
+
+
+def test_future_prices_do_not_change_signal_or_levels_at_decision() -> None:
+    history = _history(100)
+    decision_at = history[-1].end
+    extreme_future = SimpleNamespace(
+        begin=decision_at,
+        end=decision_at + timedelta(hours=1),
+        open=10_000.0,
+        high=20_000.0,
+        low=1.0,
+        close=15_000.0,
+        volume=10**12,
+    )
+    settings = Settings(_env_file=None)
+
+    prefix_signal = build_signal(settings, "SBER", "1h", history)
+    isolated_signal = build_signal(
+        settings,
+        "SBER",
+        "1h",
+        available_history([*history, extreme_future], decision_at),
+    )
+
+    assert isolated_signal.technical_score == prefix_signal.technical_score
+    assert isolated_signal.atr == prefix_signal.atr
+    assert isolated_signal.support_levels == prefix_signal.support_levels
+    assert isolated_signal.resistance_levels == prefix_signal.resistance_levels
+
+
+def test_backtest_never_fills_on_signal_formation_bar(monkeypatch) -> None:
+    settings = Settings(_env_file=None, backtest_buy_slippage_bps=0, backtest_sell_slippage_bps=0)
+    template = build_trading_idea(
+        settings,
+        instrument_name="Сбербанк",
+        horizon=IdeaHorizon.INTRADAY_1D,
+        signals=[signal("15m", 60), signal("1h", 60), signal("1d", 60)],
+        now=NOW,
+    )
+    assert template is not None
+    template = replace(
+        template,
+        status=IdeaStatus.ACTIVE,
+        activated_at=NOW,
+        activation_price=777,
+        entry_price_from=99,
+        entry_price_to=100,
+        take_profit=106,
+        stop_loss=96,
+    )
+    first = SimpleNamespace(
+        begin=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        end=datetime(2026, 1, 1, 11, tzinfo=UTC),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.0,
+        volume=1_000.0,
+    )
+    second = SimpleNamespace(
+        begin=first.end,
+        end=first.end + timedelta(hours=1),
+        open=102.0,
+        high=103.0,
+        low=99.5,
+        close=101.0,
+        volume=1_000.0,
+    )
+
+    monkeypatch.setattr(
+        "app.backtest.build_trading_idea",
+        lambda *args, **kwargs: replace(template),
+    )
+    result = BacktestEngine(settings).run(
+        ticker="SBER",
+        instrument_name="Сбербанк",
+        horizon=IdeaHorizon.INTRADAY_1D,
+        candles_by_timeframe={"15m": [first, second]},
+        initial_equity=100_000,
+    )
+
+    assert result.metrics.idea_count == 1
+    assert result.metrics.activated_count == 1
+    assert result.trades[0].entry_price == 100
+    assert result.trades[0].entry_price != 777
+    assert result.trades[0].activated_at == second.begin

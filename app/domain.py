@@ -172,8 +172,11 @@ class PositionSize:
 class TradePnL:
     gross_pnl: float
     commission: float
+    slippage: float
     net_pnl: float
     r_multiple: float
+    entry_fill_price: float
+    exit_fill_price: float
 
 
 @dataclass(slots=True)

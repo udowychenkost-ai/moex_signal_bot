@@ -140,20 +140,60 @@ def calculate_trade_pnl(
     units: int,
     commission_pct: float,
     actual_risk: float,
+    buy_slippage_bps: float = 0.0,
+    sell_slippage_bps: float = 0.0,
 ) -> TradePnL:
     if direction not in {"BUY", "SELL"}:
         raise ValueError("direction must be BUY or SELL")
     if min(entry_price, exit_price) <= 0 or units < 0:
         raise ValueError("prices must be positive and units non-negative")
-    if commission_pct < 0 or actual_risk < 0:
-        raise ValueError("commission and actual risk must be non-negative")
-    price_move = exit_price - entry_price if direction == "BUY" else entry_price - exit_price
-    gross_pnl = price_move * units
-    commission = (entry_price + exit_price) * units * commission_pct / 100
-    net_pnl = gross_pnl - commission
+    if min(commission_pct, actual_risk, buy_slippage_bps, sell_slippage_bps) < 0:
+        raise ValueError("commission, risk and slippage must be non-negative")
+    entry_side = direction
+    exit_side = "SELL" if direction == "BUY" else "BUY"
+    entry_fill = apply_slippage(
+        entry_price,
+        order_side=entry_side,
+        buy_slippage_bps=buy_slippage_bps,
+        sell_slippage_bps=sell_slippage_bps,
+    )
+    exit_fill = apply_slippage(
+        exit_price,
+        order_side=exit_side,
+        buy_slippage_bps=buy_slippage_bps,
+        sell_slippage_bps=sell_slippage_bps,
+    )
+    reference_move = exit_price - entry_price if direction == "BUY" else entry_price - exit_price
+    execution_move = exit_fill - entry_fill if direction == "BUY" else entry_fill - exit_fill
+    gross_pnl = reference_move * units
+    execution_pnl = execution_move * units
+    slippage = max(0.0, gross_pnl - execution_pnl)
+    commission = (entry_fill + exit_fill) * units * commission_pct / 100
+    net_pnl = gross_pnl - slippage - commission
     return TradePnL(
         gross_pnl=gross_pnl,
         commission=commission,
+        slippage=slippage,
         net_pnl=net_pnl,
         r_multiple=net_pnl / actual_risk if actual_risk else 0.0,
+        entry_fill_price=entry_fill,
+        exit_fill_price=exit_fill,
     )
+
+
+def apply_slippage(
+    price: float,
+    *,
+    order_side: str,
+    buy_slippage_bps: float,
+    sell_slippage_bps: float,
+) -> float:
+    if price <= 0:
+        raise ValueError("price must be positive")
+    if order_side not in {"BUY", "SELL"}:
+        raise ValueError("order_side must be BUY or SELL")
+    if min(buy_slippage_bps, sell_slippage_bps) < 0:
+        raise ValueError("slippage must be non-negative")
+    if order_side == "BUY":
+        return price * (1 + buy_slippage_bps / 10_000)
+    return price * (1 - sell_slippage_bps / 10_000)

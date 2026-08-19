@@ -115,6 +115,38 @@ def test_trade_pnl_is_shared_by_buy_and_sell_simulations(
         actual_risk=500,
     )
     assert result.gross_pnl == expected_gross
+    assert result.slippage == 0
     assert result.commission == pytest.approx((entry + exit_price) * 100 * 0.0005)
     assert result.net_pnl == pytest.approx(result.gross_pnl - result.commission)
     assert result.r_multiple == pytest.approx(result.net_pnl / 500)
+
+
+@pytest.mark.parametrize(
+    ("direction", "entry_fill", "exit_fill", "expected_slippage"),
+    [
+        ("BUY", 100.1, 109.78, 32.0),
+        ("SELL", 99.8, 90.09, 29.0),
+    ],
+)
+def test_trade_pnl_attributes_directional_buy_and_sell_slippage(
+    direction: str,
+    entry_fill: float,
+    exit_fill: float,
+    expected_slippage: float,
+) -> None:
+    exit_price = 110 if direction == "BUY" else 90
+    result = calculate_trade_pnl(
+        direction=direction,
+        entry_price=100,
+        exit_price=exit_price,
+        units=100,
+        commission_pct=0.05,
+        actual_risk=500,
+        buy_slippage_bps=10,
+        sell_slippage_bps=20,
+    )
+
+    assert result.entry_fill_price == pytest.approx(entry_fill)
+    assert result.exit_fill_price == pytest.approx(exit_fill)
+    assert result.slippage == pytest.approx(expected_slippage)
+    assert result.net_pnl == pytest.approx(result.gross_pnl - result.slippage - result.commission)

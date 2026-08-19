@@ -87,7 +87,10 @@ def evaluate_idea_candle(
     status = IdeaStatus(idea.status)
     if status not in {IdeaStatus.PENDING_ENTRY, IdeaStatus.ACTIVE}:
         return []
-    if _utc(candle.begin) >= _utc(idea.expires_at):
+    # OHLC does not reveal whether an intra-candle price event occurred before or
+    # after a deadline inside that candle. Expiring before such an ambiguous bar
+    # prevents post-expiry TP/SL leakage.
+    if _utc(candle.end) > _utc(idea.expires_at):
         return [
             IdeaTransition(
                 to_status=IdeaStatus.EXPIRED,

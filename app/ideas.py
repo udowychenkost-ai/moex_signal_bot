@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.domain import (
     GeneratedSignal,
+    HorizonProfile,
     IdeaDirection,
     IdeaHorizon,
     IdeaStatus,
@@ -92,18 +93,21 @@ def build_trading_idea(
     now: datetime | None = None,
     fundamental_score: float | None = None,
     news_score: float | None = None,
+    profile: HorizonProfile | None = None,
 ) -> TradingIdeaData | None:
-    profile = get_horizon_profile(horizon)
+    selected_profile = profile or get_horizon_profile(horizon)
+    if selected_profile.horizon != horizon:
+        raise ValueError("profile horizon must match requested horizon")
     by_timeframe = {signal.timeframe: signal for signal in signals}
-    primary = by_timeframe.get(profile.primary_timeframe)
+    primary = by_timeframe.get(selected_profile.primary_timeframe)
     if primary is None or primary.atr is None:
         return None
     available = {
         timeframe: weight
-        for timeframe, weight in profile.timeframe_weights.items()
+        for timeframe, weight in selected_profile.timeframe_weights.items()
         if timeframe in by_timeframe
     }
-    coverage = sum(available.values()) / sum(profile.timeframe_weights.values())
+    coverage = sum(available.values()) / sum(selected_profile.timeframe_weights.values())
     if coverage < 0.5:
         return None
     weight_total = sum(available.values())
@@ -115,13 +119,13 @@ def build_trading_idea(
         / weight_total
     )
     factor_values = {"technical": technical_score}
-    factor_weights = {"technical": profile.technical_weight}
+    factor_weights = {"technical": selected_profile.technical_weight}
     if fundamental_score is not None:
         factor_values["fundamental"] = fundamental_score
-        factor_weights["fundamental"] = profile.fundamental_weight
+        factor_weights["fundamental"] = selected_profile.fundamental_weight
     if news_score is not None:
         factor_values["news"] = news_score
-        factor_weights["news"] = profile.news_weight
+        factor_weights["news"] = selected_profile.news_weight
     available_factor_weight = sum(factor_weights.values())
     total_score = (
         sum(factor_values[name] * factor_weights[name] for name in factor_values)
@@ -135,7 +139,7 @@ def build_trading_idea(
         return None
 
     confidence = min(95.0, 50.0 + abs(total_score) * 0.45)
-    minimum_confidence = max(settings.idea_minimum_confidence, profile.minimum_confidence)
+    minimum_confidence = max(settings.idea_minimum_confidence, selected_profile.minimum_confidence)
     if confidence < minimum_confidence:
         return None
 
@@ -146,7 +150,7 @@ def build_trading_idea(
         atr=primary.atr,
         support_levels=primary.support_levels,
         resistance_levels=primary.resistance_levels,
-        zone_atr=profile.entry_zone_atr,
+        zone_atr=selected_profile.entry_zone_atr,
     )
     reference_entry = entry_to if direction == IdeaDirection.BUY else entry_from
     risk = None
@@ -164,8 +168,8 @@ def build_trading_idea(
             action=direction.value,
             entry=reference_entry,
             atr=primary.atr,
-            stop_multiplier=profile.atr_stop_multiplier,
-            take_multiplier=profile.atr_take_multiplier,
+            stop_multiplier=selected_profile.atr_stop_multiplier,
+            take_multiplier=selected_profile.atr_take_multiplier,
         )
     if risk.reward_risk_ratio + 1e-9 < settings.minimum_reward_risk_ratio:
         return None
@@ -193,7 +197,7 @@ def build_trading_idea(
         instrument_name=instrument_name,
         direction=direction,
         horizon=horizon,
-        primary_timeframe=profile.primary_timeframe,
+        primary_timeframe=selected_profile.primary_timeframe,
         entry_price_from=entry_from,
         entry_price_to=entry_to,
         current_price=current_price,
@@ -209,7 +213,7 @@ def build_trading_idea(
         created_at=timestamp,
         activated_at=timestamp if status == IdeaStatus.ACTIVE else None,
         activation_price=current_price if status == IdeaStatus.ACTIVE else None,
-        expires_at=timestamp + profile.default_expiry,
+        expires_at=timestamp + selected_profile.default_expiry,
         source_signal_id=primary.record_id,
         source_timeframes=list(available),
         source_candle_begin=primary.candle_begin,
