@@ -47,6 +47,7 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
         "created_at": data.created_at,
         "updated_at": data.created_at,
         "activated_at": data.activated_at,
+        "activation_price": data.activation_price,
         "expires_at": data.expires_at,
         "closed_at": data.closed_at,
         "close_reason": data.close_reason,

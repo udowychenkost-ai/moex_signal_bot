@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     default_idea_horizon: Literal["INTRADAY_1D", "SWING_5D", "POSITION_1M", "all"] = "all"
     default_minimum_confidence: float = Field(default=70.0, ge=50, le=95)
     paper_account_size: float = Field(default=1_000_000.0, gt=0)
+    backtest_commission_pct: float = Field(default=0.05, ge=0, le=5)
 
     @field_validator("default_timeframe")
     @classmethod

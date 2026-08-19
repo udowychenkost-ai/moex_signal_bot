@@ -143,6 +143,8 @@ class IngestionService:
         now = datetime.now(UTC)
         async with self.session_factory() as session:
             latest = await latest_candle_begin(session, secid, timeframe)
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=UTC)
         date_from = latest - OVERLAP[timeframe] if latest else now - LOOKBACK[timeframe]
         candles = await self.moex.fetch_candles(secid, timeframe, date_from, board_id=board_id)
         async with self._write_lock:

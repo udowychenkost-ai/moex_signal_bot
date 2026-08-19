@@ -161,6 +161,7 @@ class IdeaTracker:
         idea.updated_at = transition.occurred_at
         if transition.to_status == IdeaStatus.ACTIVE:
             idea.activated_at = transition.occurred_at
+            idea.activation_price = transition.price
         elif transition.to_status not in {
             IdeaStatus.PENDING_ENTRY,
             IdeaStatus.ACTIVE,

@@ -216,6 +216,7 @@ class TradingIdeaData:
     source_signal_id: int | None = None
     source_timeframes: list[str] = field(default_factory=list)
     activated_at: datetime | None = None
+    activation_price: float | None = None
     closed_at: datetime | None = None
     close_reason: str | None = None
     close_price: float | None = None

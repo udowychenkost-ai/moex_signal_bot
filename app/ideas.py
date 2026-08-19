@@ -193,6 +193,7 @@ def build_trading_idea(
         status=status,
         created_at=timestamp,
         activated_at=timestamp if status == IdeaStatus.ACTIVE else None,
+        activation_price=current_price if status == IdeaStatus.ACTIVE else None,
         expires_at=timestamp + profile.default_expiry,
         source_signal_id=primary.record_id,
         source_timeframes=list(available),
