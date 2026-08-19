@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import math
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from statistics import fmean, median, pstdev
 
+from app.analysis import TechnicalFeatures, prepare_technical_features
 from app.config import Settings
 from app.domain import (
     GeneratedSignal,
@@ -19,7 +21,7 @@ from app.horizons import get_horizon_profile
 from app.idea_tracker import evaluate_idea_candle
 from app.ideas import build_trading_idea
 from app.risk import apply_slippage, calculate_position_size, calculate_trade_pnl
-from app.signals import build_signal
+from app.signals import analyze_signal_technical, build_signal
 
 
 @dataclass(slots=True)
@@ -107,12 +109,12 @@ class _SimulationRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class _HistoryIndex:
+class HistoryIndex:
     candles: tuple[object, ...]
     end_times: tuple[datetime, ...]
 
     @classmethod
-    def build(cls, candles: list[object]) -> _HistoryIndex:
+    def build(cls, candles: list[object]) -> HistoryIndex:
         ordered = tuple(sorted(candles, key=lambda candle: _utc(candle.end)))
         return cls(ordered, tuple(_utc(candle.end) for candle in ordered))
 
@@ -120,6 +122,17 @@ class _HistoryIndex:
         cutoff = bisect_right(self.end_times, _utc(decision_at))
         start = max(0, cutoff - limit)
         return list(self.candles[start:cutoff])
+
+    def period(
+        self,
+        start_at: datetime | None,
+        end_at: datetime | None,
+    ) -> tuple[object, ...]:
+        start = bisect_left(self.end_times, _utc(start_at)) if start_at is not None else 0
+        stop = (
+            bisect_left(self.end_times, _utc(end_at)) if end_at is not None else len(self.candles)
+        )
+        return self.candles[start:stop]
 
 
 def _utc(value: datetime) -> datetime:
@@ -133,7 +146,7 @@ def available_history(
     limit: int = 500,
 ) -> list[object]:
     """Return only candles fully known at decision time (audit/test helper)."""
-    return _HistoryIndex.build(candles).available(decision_at, limit=limit)
+    return HistoryIndex.build(candles).available(decision_at, limit=limit)
 
 
 def _apply_transitions(record: _SimulationRecord, transitions: list[object]) -> None:
@@ -429,6 +442,9 @@ class BacktestEngine:
         end_at: datetime | None = None,
         profile: HorizonProfile | None = None,
         liquidate_at_end: bool = True,
+        analysis_cache: dict[tuple[object, ...], TechnicalFeatures] | None = None,
+        feature_provider: (Callable[[str, str, list[object]], TechnicalFeatures] | None) = None,
+        prepared_indexes: dict[str, HistoryIndex] | None = None,
     ) -> BacktestResult:
         selected_profile = profile or get_horizon_profile(horizon)
         if selected_profile.horizon != horizon:
@@ -437,13 +453,14 @@ class BacktestEngine:
             raise ValueError("start_at must precede end_at")
 
         indexes = {
-            timeframe: _HistoryIndex.build(candles_by_timeframe.get(timeframe, []))
+            timeframe: (
+                prepared_indexes[timeframe]
+                if prepared_indexes is not None and timeframe in prepared_indexes
+                else HistoryIndex.build(candles_by_timeframe.get(timeframe, []))
+            )
             for timeframe in selected_profile.timeframe_weights
         }
-        primary_candles = sorted(
-            candles_by_timeframe.get(selected_profile.primary_timeframe, []),
-            key=lambda candle: _utc(candle.end),
-        )
+        primary_candles = indexes[selected_profile.primary_timeframe].period(start_at, end_at)
         equity = initial_equity or self.settings.paper_account_size
         if equity <= 0:
             raise ValueError("initial equity must be positive")
@@ -455,12 +472,6 @@ class BacktestEngine:
 
         for primary in primary_candles:
             decision_at = _utc(primary.end)
-            if start_at is not None and decision_at < _utc(start_at):
-                continue
-            # Evaluation windows are [start_at, end_at): a boundary candle must
-            # never appear in two adjacent TRAIN/VALIDATION/TEST periods.
-            if end_at is not None and decision_at >= _utc(end_at):
-                break
             last_processed = primary
 
             if open_record is not None:
@@ -485,12 +496,29 @@ class BacktestEngine:
                 if len(history) < 60:
                     continue
                 try:
+                    if feature_provider is not None:
+                        features = feature_provider(ticker, timeframe, history)
+                    else:
+                        cache_key = (ticker, timeframe, _utc(history[-1].end))
+                        features = (
+                            analysis_cache.get(cache_key) if analysis_cache is not None else None
+                        )
+                        if features is None:
+                            features = prepare_technical_features(history)
+                            if analysis_cache is not None:
+                                analysis_cache[cache_key] = features
+                    technical = analyze_signal_technical(
+                        self.settings,
+                        history,
+                        features=features,
+                    )
                     generated_signals.append(
                         build_signal(
                             self.settings,
                             ticker,
                             timeframe,
                             history,
+                            technical_result=technical,
                         )
                     )
                 except InsufficientDataError:

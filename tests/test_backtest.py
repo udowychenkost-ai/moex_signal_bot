@@ -10,6 +10,7 @@ import pytest
 from app.backtest import (
     BacktestEngine,
     BacktestTrade,
+    HistoryIndex,
     available_history,
     calculate_backtest_metrics,
 )
@@ -246,3 +247,58 @@ def test_backtest_period_end_is_exclusive_for_non_overlapping_splits(monkeypatch
     )
 
     assert decisions == [candles[0].end]
+
+
+def test_research_analysis_cache_reuses_only_identical_historical_analysis(monkeypatch) -> None:
+    history = _history(100)
+    settings = Settings(_env_file=None, signal_threshold=20)
+    cache = {}
+    calls = 0
+    original = __import__("app.backtest", fromlist=["prepare_technical_features"])
+    real_prepare = original.prepare_technical_features
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr("app.backtest.prepare_technical_features", counted)
+    kwargs = {
+        "ticker": "SBER",
+        "instrument_name": "Сбербанк",
+        "horizon": IdeaHorizon.INTRADAY_1D,
+        "candles_by_timeframe": {"15m": history, "1h": history, "1d": history},
+        "analysis_cache": cache,
+    }
+    first = BacktestEngine(settings).run(**kwargs)
+    first_call_count = calls
+    second = BacktestEngine(settings).run(**kwargs)
+
+    assert first_call_count > 0
+    assert calls == first_call_count
+    assert first.metrics == second.metrics
+
+
+def test_prepared_history_indexes_preserve_backtest_results() -> None:
+    history = _history(100)
+    settings = Settings(_env_file=None, signal_threshold=20)
+    histories = {"15m": history, "1h": history, "1d": history}
+    kwargs = {
+        "ticker": "SBER",
+        "instrument_name": "Сбербанк",
+        "horizon": IdeaHorizon.INTRADAY_1D,
+        "candles_by_timeframe": histories,
+        "start_at": history[20].end,
+        "end_at": history[-10].end,
+    }
+
+    canonical = BacktestEngine(settings).run(**kwargs)
+    prepared = BacktestEngine(settings).run(
+        **kwargs,
+        prepared_indexes={
+            timeframe: HistoryIndex.build(candles) for timeframe, candles in histories.items()
+        },
+    )
+
+    assert prepared.metrics == canonical.metrics
+    assert prepared.trades == canonical.trades

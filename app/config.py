@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     research_database_url: str = "sqlite+aiosqlite:///./data/research.db"
     research_config_path: str = "research.toml"
     research_output_dir: str = "reports/backtests"
+    research_workers: int = Field(default=4, ge=1, le=16)
 
     @field_validator("default_timeframe")
     @classmethod

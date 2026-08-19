@@ -3,7 +3,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 
 from app.backtest import BacktestMetrics, BacktestResult
-from app.research_runner import render_markdown_report, result_payload
+from app.research_runner import _confidence_assessment, render_markdown_report, result_payload
 
 
 def _result() -> BacktestResult:
@@ -57,6 +57,14 @@ def test_markdown_report_keeps_oos_cost_and_quality_metrics() -> None:
                         "name": "legacy_default",
                         "scoring_model": "legacy",
                     },
+                    "train": {
+                        "metrics": asdict(result.metrics),
+                        "breakdowns": result.breakdowns,
+                    },
+                    "validation": {
+                        "metrics": asdict(result.metrics),
+                        "breakdowns": result.breakdowns,
+                    },
                     "test": {
                         "metrics": asdict(result.metrics),
                         "breakdowns": result.breakdowns,
@@ -74,3 +82,14 @@ def test_markdown_report_keeps_oos_cost_and_quality_metrics() -> None:
     assert "Commission" in report
     assert "Slippage" in report
     assert "no post-hoc TEST optimization" in report
+
+
+def test_confidence_assessment_requires_enough_activated_ideas_per_bucket() -> None:
+    assessment = _confidence_assessment(
+        {
+            "60-69": {"activated": 100, "expectancy_r": 0.1},
+            "70-79": {"activated": 12, "expectancy_r": 0.2},
+        }
+    )
+
+    assert assessment.startswith("Insufficient")

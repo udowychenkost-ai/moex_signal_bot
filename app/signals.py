@@ -3,12 +3,34 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis import analyze_technical
+from app.analysis import TechnicalFeatures, analyze_technical
 from app.config import Settings
-from app.domain import GeneratedSignal, InsufficientDataError, UnknownTickerError
+from app.domain import (
+    GeneratedSignal,
+    InsufficientDataError,
+    TechnicalResult,
+    UnknownTickerError,
+)
 from app.models import SignalRecord
 from app.repositories import get_active_instrument, get_candles
 from app.risk import atr_risk_levels, level_risk_levels
+
+
+def analyze_signal_technical(
+    settings: Settings,
+    candles: list[object],
+    *,
+    features: TechnicalFeatures | None = None,
+) -> TechnicalResult:
+    weights = (
+        settings.technical_score_weights if settings.technical_scoring_model == "weighted" else None
+    )
+    return analyze_technical(
+        candles,
+        scoring_model=settings.technical_scoring_model,
+        weights=weights,
+        features=features,
+    )
 
 
 def build_signal(
@@ -18,18 +40,12 @@ def build_signal(
     candles: list[object],
     *,
     risk_per_trade_pct: float | None = None,
+    technical_result: TechnicalResult | None = None,
 ) -> GeneratedSignal:
     """Run the production analysis/scoring/risk pipeline on supplied candles."""
     if not candles:
         raise InsufficientDataError(f"Для {secid} {timeframe} свечи ещё не загружены")
-    weights = (
-        settings.technical_score_weights if settings.technical_scoring_model == "weighted" else None
-    )
-    technical = analyze_technical(
-        candles,
-        scoring_model=settings.technical_scoring_model,
-        weights=weights,
-    )
+    technical = technical_result or analyze_signal_technical(settings, candles)
     threshold = settings.signal_threshold
     if technical.score >= threshold:
         action = "BUY"

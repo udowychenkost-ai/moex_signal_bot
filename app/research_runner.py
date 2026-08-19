@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.backtest import BacktestEngine, BacktestResult
+from app.analysis import TechnicalFeatures
+from app.backtest import BacktestEngine, BacktestResult, HistoryIndex
 from app.config import Settings
 from app.domain import CandleData, IdeaHorizon
 from app.horizons import get_horizon_profile
@@ -29,6 +31,7 @@ from app.research_eval import (
     stability_score,
     walk_forward_splits,
 )
+from app.research_features import ResearchTechnicalSeries
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,16 @@ class ResearchInstrument:
     name: str
     lot_size: int
     candles_by_timeframe: dict[str, list[CandleData]]
+    features_by_timeframe: dict[str, ResearchTechnicalSeries]
+    indexes_by_timeframe: dict[str, HistoryIndex]
+
+    def provide_features(
+        self,
+        _ticker: str,
+        timeframe: str,
+        history: list[object],
+    ) -> TechnicalFeatures:
+        return self.features_by_timeframe[timeframe].at_end(history[-1].end)
 
 
 def _utc(value: datetime) -> datetime:
@@ -97,6 +110,28 @@ class ResearchRunner:
         self.settings = settings
         self.config = config
         self.session_factory = session_factory
+        self._feature_validation: dict[str, dict[str, object]] = {}
+
+    def _build_feature_series(
+        self,
+        horizon: IdeaHorizon,
+        ticker: str,
+        histories: dict[str, list[CandleData]],
+    ) -> dict[str, ResearchTechnicalSeries]:
+        result: dict[str, ResearchTechnicalSeries] = {}
+        horizon_validation = self._feature_validation.setdefault(horizon.value, {})
+        for timeframe, candles in histories.items():
+            if not candles:
+                continue
+            series = ResearchTechnicalSeries(candles)
+            validation = series.compare_canonical(samples=3)
+            horizon_validation[f"{ticker}:{timeframe}"] = validation
+            if not validation["passed"]:
+                raise RuntimeError(
+                    f"research feature fast path diverged for {ticker} {timeframe}: {validation}"
+                )
+            result[timeframe] = series
+        return result
 
     async def _load_horizon(
         self,
@@ -137,6 +172,15 @@ class ResearchRunner:
                             name=instrument.short_name,
                             lot_size=max(1, instrument.lot_size or 1),
                             candles_by_timeframe=histories,
+                            features_by_timeframe=self._build_feature_series(
+                                horizon,
+                                ticker,
+                                histories,
+                            ),
+                            indexes_by_timeframe={
+                                timeframe: HistoryIndex.build(candles)
+                                for timeframe, candles in histories.items()
+                            },
                         )
                     )
         return result
@@ -153,21 +197,28 @@ class ResearchRunner:
         allocation = self.settings.paper_account_size / len(instruments)
         research_settings = configuration.settings(self.settings)
         profile = configuration.profile(get_horizon_profile(horizon))
-        results = []
-        for instrument in instruments:
-            results.append(
-                BacktestEngine(research_settings).run(
-                    ticker=instrument.ticker,
-                    instrument_name=instrument.name,
-                    horizon=horizon,
-                    candles_by_timeframe=instrument.candles_by_timeframe,
-                    lot_size=instrument.lot_size,
-                    initial_equity=allocation,
-                    start_at=split.start,
-                    end_at=split.end,
-                    profile=profile,
-                )
+
+        def evaluate_instrument(instrument: ResearchInstrument) -> BacktestResult:
+            return BacktestEngine(research_settings).run(
+                ticker=instrument.ticker,
+                instrument_name=instrument.name,
+                horizon=horizon,
+                candles_by_timeframe=instrument.candles_by_timeframe,
+                lot_size=instrument.lot_size,
+                initial_equity=allocation,
+                start_at=split.start,
+                end_at=split.end,
+                profile=profile,
+                feature_provider=instrument.provide_features,
+                prepared_indexes=instrument.indexes_by_timeframe,
             )
+
+        worker_count = min(self.settings.research_workers, len(instruments))
+        if worker_count == 1:
+            results = [evaluate_instrument(instrument) for instrument in instruments]
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                results = list(executor.map(evaluate_instrument, instruments))
         return aggregate_results(results, initial_equity=self.settings.paper_account_size)
 
     def _simple_baselines(
@@ -255,6 +306,7 @@ class ResearchRunner:
                 }
             )
         return {
+            "declared_candidates": [candidate.as_dict() for candidate in candidates],
             "folds": rows,
             "aggregate_unseen": result_payload(
                 aggregate_results(
@@ -340,13 +392,12 @@ class ResearchRunner:
                     )
                 return _cache[key]
 
+            train_rows = [(item, evaluated(item, splits.train)) for item in candidates]
             for model_name, baseline in (("legacy", legacy), ("weighted", weighted)):
                 baseline_payloads[model_name]["horizons"][horizon.value] = {
                     split.name: result_payload(evaluated(baseline, split))
                     for split in (splits.train, splits.validation, splits.test)
                 }
-
-            train_rows = [(item, evaluated(item, splits.train)) for item in candidates]
             top_train = sorted(
                 train_rows,
                 key=lambda item: objective_score(item[1]),
@@ -402,8 +453,10 @@ class ResearchRunner:
                 horizon,
                 instruments,
                 folds,
-                candidates,
+                [legacy, weighted],
             )
+
+        calibration["batch_feature_validation"] = self._feature_validation
 
         return _json_safe(
             {
@@ -452,44 +505,199 @@ def _number(value: Any, decimals: int = 2) -> str:
     return "n/a" if value is None else f"{float(value):.{decimals}f}"
 
 
+def _append_model_comparison(
+    lines: list[str],
+    payload: dict[str, object],
+    horizon: str,
+) -> None:
+    legacy = payload.get("baseline_legacy", {}).get("horizons", {}).get(horizon)
+    weighted = payload.get("baseline_weighted", {}).get("horizons", {}).get(horizon)
+    if not legacy or not weighted:
+        return
+    lines.extend(
+        [
+            "### Fixed legacy vs weighted baselines",
+            "",
+            "| Period | Model | Ideas | Activated | Win rate | Profit factor | "
+            "Expectancy R | Max DD | Net P&L |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for period in ("train", "validation", "test"):
+        for model, source in (("legacy", legacy), ("weighted", weighted)):
+            metrics = source[period]["metrics"]
+            lines.append(
+                f"| {period.upper()} | {model} | {metrics['idea_count']} | "
+                f"{metrics['activated_count']} | {_number(metrics['win_rate'])}% | "
+                f"{_number(metrics['profit_factor'])} | "
+                f"{_number(metrics['expectancy_r'])} | "
+                f"{_number(metrics['maximum_drawdown_pct'])}% | "
+                f"{_number(metrics['net_pnl'])} |"
+            )
+    lines.append("")
+
+
+def _append_simple_baselines(
+    lines: list[str],
+    payload: dict[str, object],
+    horizon: str,
+) -> None:
+    strategies = payload.get("research_baselines", {}).get("horizons", {}).get(horizon)
+    if not strategies:
+        return
+    lines.extend(
+        [
+            "### OOS research-only benchmarks",
+            "",
+            "| Strategy | Trades | Win rate | Profit factor | Net P&L | Max DD |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for strategy, result in strategies.items():
+        metrics = result["metrics"]
+        lines.append(
+            f"| {strategy} | {metrics['activated_count']} | "
+            f"{_number(metrics['win_rate'])}% | {_number(metrics['profit_factor'])} | "
+            f"{_number(metrics['net_pnl'])} | "
+            f"{_number(metrics['maximum_drawdown_pct'])}% |"
+        )
+    lines.append("")
+
+
+def _confidence_assessment(breakdown: dict[str, dict[str, Any]]) -> str:
+    def lower_bound(bucket: str) -> int:
+        return 90 if bucket == "90+" else int(bucket.split("-", maxsplit=1)[0])
+
+    populated = [
+        (bucket, summary) for bucket, summary in breakdown.items() if int(summary["activated"]) > 0
+    ]
+    if len(populated) < 2 or any(int(summary["activated"]) < 30 for _, summary in populated):
+        return (
+            "Insufficient activated ideas per confidence bucket to assess "
+            "confidence ordering reliably."
+        )
+    usable = sorted(
+        ((lower_bound(bucket), float(summary["expectancy_r"])) for bucket, summary in populated),
+        key=lambda item: item[0],
+    )
+    monotonic = all(right[1] >= left[1] for left, right in zip(usable, usable[1:], strict=False))
+    if monotonic:
+        return "OOS expectancy is non-decreasing across populated confidence buckets."
+    return (
+        "WARNING: OOS expectancy is not monotonic across confidence buckets; "
+        "confidence is not calibrated as a reliable quality rank."
+    )
+
+
+def _research_verdict(metrics: dict[str, Any], walk_metrics: dict[str, Any] | None) -> str:
+    profit_factor = float(metrics["profit_factor"] or 0)
+    expectancy = float(metrics["expectancy_r"])
+    if profit_factor < 1 or expectancy <= 0:
+        return "REJECT: no positive OOS expectancy after execution costs."
+    if walk_metrics is not None and (
+        float(walk_metrics["profit_factor"] or 0) < 1 or float(walk_metrics["expectancy_r"]) <= 0
+    ):
+        return "UNSTABLE: positive single OOS result is not confirmed by walk-forward."
+    if profit_factor < 1.1 or expectancy < 0.05:
+        return "BORDERLINE: positive edge is too small for a strong readiness claim."
+    return "MODEST POSITIVE EDGE: suitable for forward paper validation, not real capital."
+
+
 def render_markdown_report(payload: dict[str, object]) -> str:
     lines = [
         "# Backtest validation and calibration report",
         "",
         f"Generated: {payload['generated_at']}",
         "",
-        "## Method and limitations",
+        "## Executive verdict",
         "",
-        (
-            "- Signals are formed only from candles closed at the decision time and "
-            "execute no earlier than the next primary candle."
-        ),
-        (
-            "- TRAIN selects a shortlist; VALIDATION selects the configuration; "
-            "OOS TEST is not used for parameter selection."
-        ),
-        "- The universe is a fixed current-liquid universe, so survivorship bias remains.",
-        (
-            "- MOEX candles are not adjusted for corporate actions; historical returns "
-            "around splits/dividends can be distorted."
-        ),
-        (
-            "- Sharpe is trade-level and non-annualized. Same-candle TP/SL ambiguity "
-            "is resolved conservatively as SL first."
-        ),
-        "",
+        "| Horizon | Selected | OOS PF | OOS expectancy | OOS net P&L | Verdict |",
+        "|---|---|---:|---:|---:|---|",
     ]
+    for horizon, row in payload["oos_results"]["horizons"].items():
+        metrics = row["test"]["metrics"]
+        walk = payload.get("walk_forward", {}).get("horizons", {}).get(horizon)
+        walk_metrics = walk["aggregate_unseen"]["metrics"] if walk else None
+        lines.append(
+            f"| {horizon} | {row['configuration']['name']} | "
+            f"{_number(metrics['profit_factor'])} | {_number(metrics['expectancy_r'])} R | "
+            f"{_number(metrics['net_pnl'])} RUB | "
+            f"{_research_verdict(metrics, walk_metrics)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Method and limitations",
+            "",
+            (
+                "- Signals are formed only from candles closed at the decision time and "
+                "execute no earlier than the next primary candle."
+            ),
+            (
+                "- TRAIN selects a shortlist; VALIDATION selects the configuration; "
+                "OOS TEST is not used for parameter selection."
+            ),
+            (
+                "- Each walk-forward fold recalibrates between the predeclared fixed "
+                "legacy and weighted defaults using only that fold's past."
+            ),
+            "- The universe is a fixed current-liquid universe, so survivorship bias remains.",
+            (
+                "- MOEX candles are not adjusted for corporate actions; historical returns "
+                "around splits/dividends can be distorted."
+            ),
+            (
+                "- Sharpe is trade-level and non-annualized. Same-candle TP/SL ambiguity "
+                "is resolved conservatively as SL first."
+            ),
+            (
+                "- Maximum drawdown uses realized equity after trade closes, not "
+                "intratrade mark-to-market, and can understate adverse excursion."
+            ),
+            (
+                "- Research uses causal batch indicator features for runtime. Every "
+                "ticker/timeframe is sampled against the canonical 500-candle analyzer; "
+                "the run aborts on score, level, or material numeric divergence."
+            ),
+            "",
+        ]
+    )
+    split_rows = payload.get("splits", {})
+    if split_rows:
+        lines.extend(
+            [
+                "## Dataset splits",
+                "",
+                "| Horizon | Primary | TRAIN | VALIDATION | OOS TEST | Tickers |",
+                "|---|---|---|---|---|---:|",
+            ]
+        )
+        for horizon, row in split_rows.items():
+            boundaries = row["boundaries"]
+            lines.append(
+                f"| {horizon} | {row['primary_timeframe']} | "
+                f"{boundaries['train']['start']} → {boundaries['train']['end']} | "
+                f"{boundaries['validation']['start']} → "
+                f"{boundaries['validation']['end']} | "
+                f"{boundaries['test']['start']} → {boundaries['test']['end']} | "
+                f"{len(row['available_tickers'])} |"
+            )
+        lines.append("")
     oos_horizons = payload["oos_results"]["horizons"]
     for horizon, row in oos_horizons.items():
         metrics = row["test"]["metrics"]
+        walk = payload.get("walk_forward", {}).get("horizons", {}).get(horizon)
+        walk_metrics = walk["aggregate_unseen"]["metrics"] if walk else None
         lines.extend(
             [
                 f"## {horizon} — OUT-OF-SAMPLE",
                 "",
                 (
-                    f"Best configuration: `{row['configuration']['name']}` "
+                    f"Selected configuration: `{row['configuration']['name']}` "
                     f"(`{row['configuration']['scoring_model']}`)"
                 ),
+                "",
+                f"Verdict: **{_research_verdict(metrics, walk_metrics)}**",
                 "",
                 "| Metric | Result |",
                 "|---|---:|",
@@ -516,6 +724,31 @@ def render_markdown_report(payload: dict[str, object]) -> str:
                 f"| Slippage | {_number(metrics['slippage'])} RUB |",
                 f"| Net P&L | {_number(metrics['net_pnl'])} RUB |",
                 "",
+            ]
+        )
+        _append_model_comparison(lines, payload, horizon)
+        lines.extend(
+            [
+                "### Selected configuration stability",
+                "",
+                "| Period | Ideas | Activated | Profit factor | Expectancy R | Max DD | Net P&L |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for period in ("train", "validation", "test"):
+            period_metrics = row[period]["metrics"]
+            lines.append(
+                f"| {period.upper()} | {period_metrics['idea_count']} | "
+                f"{period_metrics['activated_count']} | "
+                f"{_number(period_metrics['profit_factor'])} | "
+                f"{_number(period_metrics['expectancy_r'])} | "
+                f"{_number(period_metrics['maximum_drawdown_pct'])}% | "
+                f"{_number(period_metrics['net_pnl'])} |"
+            )
+        lines.append("")
+        _append_simple_baselines(lines, payload, horizon)
+        lines.extend(
+            [
                 "### Top / worst tickers",
                 "",
                 "| Top | Net P&L | Worst | Net P&L |",
@@ -561,6 +794,35 @@ def render_markdown_report(payload: dict[str, object]) -> str:
                 f"{_number(summary['win_rate'])}% | "
                 f"{_number(summary['expectancy_r'])} | "
                 f"{_number(summary['profit_factor'])} |"
+            )
+        confidence = row["test"]["breakdowns"].get("confidence_bucket", {})
+        lines.extend(["", _confidence_assessment(confidence), ""])
+        lines.extend(
+            [
+                "### Calendar-year OOS breakdown",
+                "",
+                "| Year | Ideas | Activated | Win rate | Expectancy R | Net P&L |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for year, summary in row["test"]["breakdowns"].get("calendar_year", {}).items():
+            lines.append(
+                f"| {year} | {summary['ideas']} | {summary['activated']} | "
+                f"{_number(summary['win_rate'])}% | "
+                f"{_number(summary['expectancy_r'])} | {_number(summary['net_pnl'])} |"
+            )
+        if walk:
+            lines.extend(
+                [
+                    "",
+                    "### Walk-forward aggregate unseen windows",
+                    "",
+                    f"Folds: {len(walk['folds'])}; ideas: {walk_metrics['idea_count']}; "
+                    f"activated: {walk_metrics['activated_count']}; profit factor: "
+                    f"{_number(walk_metrics['profit_factor'])}; expectancy: "
+                    f"{_number(walk_metrics['expectancy_r'])} R; net P&L: "
+                    f"{_number(walk_metrics['net_pnl'])} RUB.",
+                ]
             )
         lines.append("")
     lines.extend(
