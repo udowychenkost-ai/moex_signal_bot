@@ -1,0 +1,13 @@
+services:
+  moex-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/moex_bot.db
+    volumes:
+      - moex_bot_data:/app/data
+
+volumes:
+  moex_bot_data:
+

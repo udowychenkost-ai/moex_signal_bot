@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from app.moex import MoexClient
+
+
+@pytest.mark.asyncio
+async def test_minute_candles_are_resampled_to_fifteen_minutes() -> None:
+    columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+    rows = []
+    for minute in range(15):
+        rows.append(
+            [
+                100 + minute,
+                100.5 + minute,
+                101 + minute,
+                99 + minute,
+                1000,
+                10,
+                f"2025-01-10 10:{minute:02d}:00",
+                f"2025-01-10 10:{minute:02d}:59",
+            ]
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candles": {"columns": columns, "data": rows},
+                "candles.cursor": {
+                    "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                    "data": [[0, 15, 100]],
+                },
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_candles(
+            "SBER", "15m", datetime(2025, 1, 10, tzinfo=UTC)
+        )
+    assert len(result) == 1
+    assert result[0].open == 100
+    assert result[0].close == 114.5
+    assert result[0].high == 115
+    assert result[0].low == 99
+    assert result[0].volume == 150
+
+
+@pytest.mark.asyncio
+async def test_no_cursor_pagination_uses_offset_and_stops_on_empty_page() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start", 0))
+        calls.append(start)
+        page = [[start + index] for index in range(2)] if start < 4 else []
+        return httpx.Response(200, json={"items": {"columns": ["id"], "data": page}})
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        pages = [
+            rows
+            async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
+        ]
+    assert calls == [0, 2, 4]
+    assert [row["id"] for page in pages for row in page] == [0, 1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_no_cursor_pagination_stops_when_endpoint_ignores_offset() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200, json={"items": {"columns": ["id"], "data": [[1], [2]]}}
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        pages = [
+            rows
+            async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
+        ]
+    assert calls == 2
+    assert len(pages) == 1
