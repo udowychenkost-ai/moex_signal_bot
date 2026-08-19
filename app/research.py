@@ -9,10 +9,12 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.db import create_engine_and_session
+from app.domain import IdeaHorizon
 from app.logging_config import configure_logging
 from app.migrations import migrate_database
 from app.moex import MoexClient
 from app.research_data import ResearchDataService, load_research_config
+from app.research_runner import ResearchRunner, write_research_outputs
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -76,6 +78,29 @@ async def ingest_dataset(
         await engine.dispose()
 
 
+async def run_validation(
+    *,
+    tickers: list[str] | None = None,
+    horizons: list[str] | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    config = load_research_config(settings.research_config_path)
+    selected_tickers = tuple(dict.fromkeys(item.upper() for item in tickers)) if tickers else None
+    selected_horizons = tuple(IdeaHorizon(item.upper()) for item in horizons) if horizons else None
+    await migrate_database(settings.research_database_url)
+    engine, session_factory = create_engine_and_session(settings.research_database_url)
+    try:
+        result = await ResearchRunner(settings, config, session_factory).run(
+            tickers=selected_tickers,
+            horizons=selected_horizons,
+        )
+        write_research_outputs(Path(settings.research_output_dir), result)
+        return result
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX validation and calibration research")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -83,6 +108,16 @@ def main() -> None:
     ingest.add_argument("--tickers", nargs="+")
     ingest.add_argument("--timeframes", nargs="+")
     ingest.add_argument("--date-to", help="inclusive YYYY-MM-DD cutoff")
+    run = subparsers.add_parser(
+        "run",
+        help="run TRAIN/VALIDATION/OOS calibration and walk-forward evaluation",
+    )
+    run.add_argument("--tickers", nargs="+")
+    run.add_argument(
+        "--horizons",
+        nargs="+",
+        choices=[item.value for item in IdeaHorizon],
+    )
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -101,6 +136,25 @@ def main() -> None:
                     "missing_tickers": result["missing_tickers"],
                     "errors": result["errors"],
                     "coverage_rows": len(result["coverage"]),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    elif args.command == "run":
+        result = asyncio.run(
+            run_validation(
+                tickers=args.tickers,
+                horizons=args.horizons,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "dataset": result["dataset"],
+                    "universe": result["universe"],
+                    "horizons": list(result["oos_results"]["horizons"]),
+                    "output_dir": get_settings().research_output_dir,
                 },
                 ensure_ascii=False,
                 indent=2,

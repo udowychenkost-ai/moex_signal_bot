@@ -225,3 +225,24 @@ def test_backtest_never_fills_on_signal_formation_bar(monkeypatch) -> None:
     assert result.trades[0].entry_price == 100
     assert result.trades[0].entry_price != 777
     assert result.trades[0].activated_at == second.begin
+
+
+def test_backtest_period_end_is_exclusive_for_non_overlapping_splits(monkeypatch) -> None:
+    candles = _history(2)
+    decisions: list[datetime] = []
+
+    def record_decision(*args, **kwargs):
+        decisions.append(kwargs["now"])
+        return None
+
+    monkeypatch.setattr("app.backtest.build_trading_idea", record_decision)
+    BacktestEngine(Settings(_env_file=None)).run(
+        ticker="SBER",
+        instrument_name="Сбербанк",
+        horizon=IdeaHorizon.INTRADAY_1D,
+        candles_by_timeframe={"15m": candles},
+        start_at=candles[0].end,
+        end_at=candles[1].end,
+    )
+
+    assert decisions == [candles[0].end]

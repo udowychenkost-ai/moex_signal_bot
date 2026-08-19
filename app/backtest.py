@@ -457,7 +457,9 @@ class BacktestEngine:
             decision_at = _utc(primary.end)
             if start_at is not None and decision_at < _utc(start_at):
                 continue
-            if end_at is not None and decision_at > _utc(end_at):
+            # Evaluation windows are [start_at, end_at): a boundary candle must
+            # never appear in two adjacent TRAIN/VALIDATION/TEST periods.
+            if end_at is not None and decision_at >= _utc(end_at):
                 break
             last_processed = primary
 
