@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -52,6 +53,7 @@ def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler
         max_instances=1,
         coalesce=True,
         misfire_grace_time=120,
+        next_run_time=datetime.now(UTC),
     )
     scheduler.add_job(
         jobs.dispatch_reports,

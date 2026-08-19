@@ -13,13 +13,14 @@ from aiogram.enums import ParseMode
 from app.backtest import BacktestEngine
 from app.bot import BotServices, create_router
 from app.config import get_settings
-from app.db import create_engine_and_session, init_db
+from app.db import create_engine_and_session
 from app.domain import IdeaHorizon
 from app.horizons import get_horizon_profile
 from app.idea_tracker import IdeaTracker
 from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
 from app.logging_config import configure_logging
+from app.migrations import migrate_database
 from app.moex import MoexClient
 from app.paper import PaperTradingService
 from app.reporting import ReportingService
@@ -34,8 +35,8 @@ logger = logging.getLogger(__name__)
 async def ingest_once() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    await migrate_database(settings.database_url)
     engine, session_factory = create_engine_and_session(settings.database_url)
-    await init_db(engine)
     try:
         async with MoexClient(
             settings.moex_base_url,
@@ -57,8 +58,8 @@ async def run_bot() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required in run mode")
 
+    await migrate_database(settings.database_url)
     engine, session_factory = create_engine_and_session(settings.database_url)
-    await init_db(engine)
     bot = Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -93,7 +94,6 @@ async def run_bot() -> None:
             scheduler = build_scheduler(settings, jobs)
             scheduler.start()
 
-            await ingestion.sync_universe()
             dispatcher = Dispatcher()
             dispatcher.include_router(create_router(services))
             logger.info("Bot polling started")
@@ -109,8 +109,8 @@ async def run_backtest(ticker: str, horizon_value: str) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     horizon = IdeaHorizon(horizon_value)
+    await migrate_database(settings.database_url)
     engine, session_factory = create_engine_and_session(settings.database_url)
-    await init_db(engine)
     try:
         profile = get_horizon_profile(horizon)
         async with session_factory() as session:
@@ -138,9 +138,21 @@ async def run_backtest(ticker: str, horizon_value: str) -> None:
         await engine.dispose()
 
 
+async def migrate_once() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    await migrate_database(settings.database_url)
+    logger.info("Database schema is at Alembic head")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX signal bot")
-    parser.add_argument("command", choices=("run", "ingest", "backtest"), nargs="?", default="run")
+    parser.add_argument(
+        "command",
+        choices=("run", "ingest", "backtest", "migrate"),
+        nargs="?",
+        default="run",
+    )
     parser.add_argument("ticker", nargs="?")
     parser.add_argument(
         "horizon",
@@ -153,10 +165,12 @@ def main() -> None:
         asyncio.run(run_bot())
     elif args.command == "ingest":
         asyncio.run(ingest_once())
-    else:
+    elif args.command == "backtest":
         if not args.ticker:
             parser.error("backtest requires TICKER")
         asyncio.run(run_backtest(args.ticker, args.horizon))
+    else:
+        asyncio.run(migrate_once())
 
 
 if __name__ == "__main__":

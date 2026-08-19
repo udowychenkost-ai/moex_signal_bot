@@ -48,3 +48,4 @@ def test_one_scheduler_contains_separate_scan_and_report_tasks() -> None:
     )
     scheduler = build_scheduler(Settings(_env_file=None), jobs)
     assert {job.id for job in scheduler.get_jobs()} == {"market_scan", "idea_reporting"}
+    assert scheduler.get_job("market_scan").next_run_time is not None

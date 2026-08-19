@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 
+from app.migrations import migrate_database
 
-def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch) -> None:
+
+def migration_config(database_url: str) -> Config:
+    config = Config("alembic.ini")
+    config.attributes["database_url"] = database_url
+    return config
+
+
+def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "migration.db"
     database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    config = Config("alembic.ini")
+    config = migration_config(database_url)
 
     command.upgrade(config, "head")
 
@@ -48,4 +56,35 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch
         "news_score",
         "total_score",
     }.issubset(idea_columns)
+    assert revision == ("20260819_0006",)
+
+
+async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    await asyncio.to_thread(command.upgrade, migration_config(database_url), "20260819_0001")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("DROP TABLE alembic_version")
+
+    await migrate_database(database_url)
+
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert "trading_ideas" in tables
+    assert "paper_trades" in tables
+    assert revision == ("20260819_0006",)
+
+
+async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "fresh.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+
+    await migrate_database(database_url)
+
+    with sqlite3.connect(database_path) as connection:
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert revision == ("20260819_0006",)
