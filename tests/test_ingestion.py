@@ -28,4 +28,3 @@ def test_threshold_classifier_and_liquidity_floor() -> None:
     assert classify_echelon(liquid, settings()) == 1
     assert classify_echelon(second, settings()) == 2
     assert classify_echelon(illiquid, settings()) == 0
-

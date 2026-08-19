@@ -1,43 +1,56 @@
-# MOEX Signal Bot — MVP
+# MOEX Signal Bot
 
-Изолированный Python-сервис Telegram-сигналов для акций Московской биржи. На первом этапе реализованы стабильный сбор данных из MOEX ISS и MVP-контур бота; существующий проект в корне репозитория не изменяется.
+Асинхронный Telegram-бот торговых сигналов для акций Московской биржи. Сервис
+получает данные через MOEX ISS, хранит рыночную историю и сигналы, рассчитывает
+объяснимый технический score, BUY/SELL/HOLD и безопасные TP/SL.
 
-## Что уже работает
+> Сигналы носят информационный характер и не являются индивидуальной
+> инвестиционной рекомендацией.
 
-- загрузка и обновление списка акций режима TQBR;
-- настраиваемая вселенная топ-20 и классификация 1/2 эшелона;
-- свечи M5, M15, H1, D1 и W1 (M5/M15 агрегируются из M1);
-- инкрементальная запись свечей с upsert последней незакрытой свечи;
-- снимки 20 уровней стакана с хранением за последние 24 часа при наличии ISS+ доступа;
-- SQLite по умолчанию, PostgreSQL через `DATABASE_URL`;
-- RSI, MACD, EMA20/50, ATR, объёмный всплеск, поддержка/сопротивление;
-- объяснимый скор от −100 до +100 и BUY/SELL/HOLD;
-- ATR stop-loss/take-profit с R:R 1:2 и пользовательским риском на сделку;
-- команды `/start`, `/signal`, `/watchlist`, `/settings`, `/portfolio`;
-- фоновые обновления и алерты при новом BUY/SELL по watchlist;
-- журнал всех сигналов в БД и тесты ключевой логики.
+## Реализовано
 
-Фундаментал, облигации, графики, новости, бэктест и paper trading оставлены следующими вехами — текущая версия не имитирует их фиктивными данными.
+- асинхронный MOEX ISS-клиент на `httpx`: retry/backoff, пагинация и ограничение
+  конкурентных запросов;
+- вселенная ликвидных акций TQBR с 1/2 эшелонами и деактивацией устаревшего
+  состава;
+- свечи M5, M15, H1, D1 и W1; M5/M15 агрегируются из M1;
+- идемпотентная инкрементальная запись свечей и снимки 20 уровней стакана;
+- единый набор индикаторов: SMA20/50/200, EMA20/50, MACD, ADX, RSI,
+  Stochastic, CCI, Bollinger Bands, ATR, OBV и относительный объём;
+- кластеризованные локальные уровни поддержки/сопротивления;
+- настраиваемый компонентный score от −100 до +100 и режим совместимости
+  `legacy`;
+- BUY/SELL/HOLD, confidence и текстовое объяснение результата;
+- TP/SL по ATR либо по уровням с проверкой направления и минимального R:R;
+- расчёт размера позиции с учётом размера лота, риска и доступного капитала;
+- Telegram-команды `/start`, `/signal`, `/watchlist`, `/settings`, `/portfolio`;
+- один APScheduler для загрузки и персонализированных alert'ов по watchlist;
+- SQLite по умолчанию и PostgreSQL через асинхронный DSN;
+- Docker-запуск от непривилегированного пользователя и ротация container logs.
+
+Фундаментальный анализ, новости/sentiment, облигации, полноценный backtesting и
+paper trading пока не реализованы. `/portfolio` честно сообщает об этом; сервис
+не выдаёт фиктивные позиции или P&L.
 
 ## Быстрый старт
 
 Требуется Python 3.11+.
 
 ```powershell
-cd "D:\Социальная касса\moex_signal_bot"
+cd D:\moex_signal_bot
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Создайте бота через BotFather и запишите токен в `.env`:
+Укажите токен, полученный у BotFather:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:replace_me
 ```
 
-Первичная загрузка без запуска Telegram polling:
+Первичная загрузка без Telegram polling:
 
 ```powershell
 python -m app ingest
@@ -58,23 +71,58 @@ docker compose up --build -d
 docker compose logs -f moex-bot
 ```
 
-Для отдельной первичной загрузки:
+Первичная загрузка в отдельном контейнере:
 
 ```powershell
 docker compose run --rm moex-bot python -m app ingest
 ```
 
-## PostgreSQL
-
-Поддержка уже включена. Укажите асинхронный DSN:
+SQLite хранится в именованном volume `moex_bot_data`. Для PostgreSQL задайте
+асинхронный DSN:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://moex:secret@postgres:5432/moex
 ```
 
-Для production следует добавить Alembic-миграции и отдельный PostgreSQL-сервис/managed database. Автосоздание таблиц предназначено для MVP.
+Таблицы пока создаются через SQLAlchemy metadata. Перед изменением production-
+схемы необходимо добавить Alembic: автоматическое `create_all` не заменяет
+версионированные миграции.
 
-## Команды
+## Scoring и риск
+
+По умолчанию применяется `TECHNICAL_SCORING_MODEL=legacy`, чтобы обновление не
+меняло ранее настроенные сигналы. Для новой компонентной модели явно задайте
+`TECHNICAL_SCORING_MODEL=weighted`. Пять компонентов нормализуются до 100,
+поэтому веса можно менять без ручного сохранения суммы:
+
+```env
+SCORE_WEIGHT_TREND=25
+SCORE_WEIGHT_MOMENTUM=25
+SCORE_WEIGHT_MACD=20
+SCORE_WEIGHT_BOLLINGER=15
+SCORE_WEIGHT_VOLUME=15
+SIGNAL_THRESHOLD=25
+```
+
+`TECHNICAL_SCORING_MODEL=legacy` сохраняет прежнюю формулу и выбор уровней.
+TP/SL настраивается через `RISK_METHOD=atr|levels`. При `levels` небезопасный или
+недостаточный набор уровней автоматически откатывается к ATR; скрытой смены
+направления сделки не происходит.
+
+```env
+RISK_METHOD=levels
+LEVEL_BUFFER_PCT=0.3
+MINIMUM_REWARD_RISK_RATIO=2.0
+ATR_STOP_MULTIPLIER=1.5
+ATR_TAKE_MULTIPLIER=3.0
+```
+
+## Планировщик и Telegram
+
+Планировщик работает по будням с 10:00 до 18:59 в
+`SCHEDULER_TIMEZONE` (по умолчанию `Europe/Moscow`). Частота задаётся
+`INGESTION_INTERVAL_MINUTES`. Повторный BUY/SELL на той же свече не отправляется,
+а процент риска берётся из настроек конкретного получателя.
 
 ```text
 /signal SBER
@@ -87,11 +135,11 @@ DATABASE_URL=postgresql+asyncpg://moex:secret@postgres:5432/moex
 /settings risk 0.5
 ```
 
-Планировщик запускается по будням с 10:00 до 18:59 по Москве. Частота задаётся `INGESTION_INTERVAL_MINUTES`. Один и тот же сигнал на одной и той же свече повторно не отправляется.
+## MOEX ISS и стакан
 
-### Стакан и ISS+
-
-На публичном `iss.moex.com` свечи доступны без ключа, но endpoint L2 сейчас может отвечать `X-MicexPassport-Marker: denied`. Поэтому стакан по умолчанию выключен и сбой L2 не мешает сохранять OHLCV. При наличии доступа задайте:
+Публичный `iss.moex.com` предоставляет свечи без токена. L2 endpoint может
+требовать ISS+ и отвечать маркером `denied`, поэтому стакан по умолчанию выключен,
+а его недоступность не мешает OHLCV ingestion.
 
 ```env
 MOEX_BASE_URL=https://apim.moex.com/iss
@@ -99,27 +147,17 @@ MOEX_API_TOKEN=your_iss_plus_token
 ENABLE_ORDERBOOK=true
 ```
 
-## Конфигурация эшелонов
-
-ISS не всегда возвращает free-float в основном срезе инструментов. Поэтому MVP использует два прозрачных правила:
-
-1. тикеры из `BLUE_CHIP_TICKERS` относятся к первому эшелону;
-2. для остальных применяются пороги капитализации, оборота и free-float, когда все метрики доступны; ликвидные бумаги ниже первого порога попадают во второй эшелон.
-
-Текущий `VALTODAY` используется как оперативный показатель оборота. Расчёт настоящего среднего дневного оборота по истории — ближайшее расширение Модуля 1.
-
-## Тесты и линтер
+## Проверки
 
 ```powershell
-pytest
+pytest -q
 ruff check app tests
+python -m compileall -q app
 ```
 
-## Ограничения MVP
+Технический аудит альтернативной реализации и принятые решения находятся в
+[`docs/CLAUDE_INTEGRATION_AUDIT.md`](docs/CLAUDE_INTEGRATION_AUDIT.md). История
+интеграции — в [`CHANGELOG.md`](CHANGELOG.md), сведения о сторонних компонентах —
+в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-- Публичный ISS может отдавать задержанные или неполные данные вне торговой сессии.
-- Сигналы — детерминированный технический скоринг, не прогноз и не рекомендация.
-- `/portfolio` пока сообщает статус будущего paper-trading модуля.
-- Публичный REST-стакан подходит для мониторинга, но не заменяет брокерский L2 для исполнения.
-
-Официальная справка по полям свечей и стакана: [MOEX ALGOPACK / real-time market data](https://moexalgo.github.io/docs/description/realtime/).
+Официальное описание market data: [MOEX AlgoPack / real-time market data](https://moexalgo.github.io/docs/description/realtime/).

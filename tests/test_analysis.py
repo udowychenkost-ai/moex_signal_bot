@@ -52,4 +52,3 @@ def test_analysis_returns_explainable_bounded_score() -> None:
 def test_analysis_rejects_short_history() -> None:
     with pytest.raises(InsufficientDataError, match="60"):
         analyze_technical([])
-

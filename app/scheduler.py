@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from dataclasses import replace
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
@@ -45,11 +46,11 @@ class ScheduledJobs:
     async def alert_watchlists(self) -> None:
         async with self.session_factory() as session:
             subscriptions = await list_subscriptions(session)
-        grouped: dict[tuple[str, str], list[int]] = defaultdict(list)
-        for telegram_id, secid, timeframe in subscriptions:
-            grouped[(secid, timeframe)].append(telegram_id)
+        grouped: dict[tuple[str, str], list[tuple[int, float]]] = defaultdict(list)
+        for telegram_id, secid, timeframe, risk_pct in subscriptions:
+            grouped[(secid, timeframe)].append((telegram_id, risk_pct))
 
-        for (secid, timeframe), chat_ids in grouped.items():
+        for (secid, timeframe), recipients in grouped.items():
             try:
                 async with self.session_factory() as session:
                     previous = await latest_signal(session, secid, timeframe)
@@ -60,9 +61,10 @@ class ScheduledJobs:
                     and previous.candle_begin == generated.candle_begin
                 ):
                     continue
-                for chat_id in chat_ids:
+                for chat_id, risk_pct in recipients:
                     try:
-                        await self.bot.send_message(chat_id, format_signal(generated))
+                        personalized = replace(generated, risk_pct=risk_pct)
+                        await self.bot.send_message(chat_id, format_signal(personalized))
                     except TelegramForbiddenError:
                         async with self.session_factory() as session, session.begin():
                             await session.execute(

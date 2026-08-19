@@ -4,10 +4,14 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////app/data/moex_bot.db
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/moex_bot.db}
     volumes:
       - moex_bot_data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   moex_bot_data:
-

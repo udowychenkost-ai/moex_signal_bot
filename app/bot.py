@@ -14,7 +14,7 @@ from app.models import TelegramUser
 from app.repositories import (
     add_watchlist_item,
     ensure_user,
-    get_instrument,
+    get_active_instrument,
     get_watchlist,
     remove_watchlist_item,
     update_user_settings,
@@ -109,7 +109,7 @@ def create_router(services: BotServices) -> Router:
         action, secid = tokens[1].lower(), tokens[2].upper()
         async with services.session_factory() as session, session.begin():
             if action == "add":
-                if await get_instrument(session, secid) is None:
+                if await get_active_instrument(session, secid) is None:
                     await message.answer(f"{secid} не входит в текущую вселенную MVP")
                     return
                 changed = await add_watchlist_item(session, user.telegram_id, secid)
@@ -125,10 +125,13 @@ def create_router(services: BotServices) -> Router:
         user = await _ensure_message_user(message, services)
         tokens = _tokens(message)
         if len(tokens) == 1:
+            risk_method = "ATR" if services.settings.risk_method == "atr" else "уровни S/R"
             await message.answer(
                 f"Таймфрейм: <b>{user.default_timeframe}</b>\n"
                 f"Риск на сделку: <b>{user.risk_per_trade_pct:.2f}%</b>\n"
-                f"Профиль: <b>{user.risk_profile}</b>"
+                f"Профиль: <b>{user.risk_profile}</b>\n"
+                f"Scoring: <b>{services.settings.technical_scoring_model}</b>\n"
+                f"TP/SL: <b>{risk_method}</b>"
             )
             return
         if len(tokens) != 3:
@@ -164,4 +167,3 @@ def create_router(services: BotServices) -> Router:
         )
 
     return router
-

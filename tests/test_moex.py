@@ -41,9 +41,7 @@ async def test_minute_candles_are_resampled_to_fifteen_minutes() -> None:
     async with MoexClient(
         "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
     ) as client:
-        result = await client.fetch_candles(
-            "SBER", "15m", datetime(2025, 1, 10, tzinfo=UTC)
-        )
+        result = await client.fetch_candles("SBER", "15m", datetime(2025, 1, 10, tzinfo=UTC))
     assert len(result) == 1
     assert result[0].open == 100
     assert result[0].close == 114.5
@@ -66,8 +64,7 @@ async def test_no_cursor_pagination_uses_offset_and_stops_on_empty_page() -> Non
         "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
     ) as client:
         pages = [
-            rows
-            async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
+            rows async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
         ]
     assert calls == [0, 2, 4]
     assert [row["id"] for page in pages for row in page] == [0, 1, 2, 3]
@@ -80,16 +77,13 @@ async def test_no_cursor_pagination_stops_when_endpoint_ignores_offset() -> None
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(
-            200, json={"items": {"columns": ["id"], "data": [[1], [2]]}}
-        )
+        return httpx.Response(200, json={"items": {"columns": ["id"], "data": [[1], [2]]}})
 
     async with MoexClient(
         "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
     ) as client:
         pages = [
-            rows
-            async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
+            rows async for _, rows in client._pages("/items.json", "items", {"iss.only": "items"})
         ]
     assert calls == 2
     assert len(pages) == 1

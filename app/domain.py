@@ -59,6 +59,20 @@ class TechnicalResult:
     resistance: float | None
     volume_ratio: float
     explanations: list[str] = field(default_factory=list)
+    sma20: float | None = None
+    sma50: float | None = None
+    sma200: float | None = None
+    adx: float | None = None
+    stochastic_k: float | None = None
+    stochastic_d: float | None = None
+    cci: float | None = None
+    bb_high: float | None = None
+    bb_low: float | None = None
+    bb_percent: float | None = None
+    obv: float | None = None
+    support_levels: list[float] = field(default_factory=list)
+    resistance_levels: list[float] = field(default_factory=list)
+    component_scores: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -68,6 +82,17 @@ class RiskLevels:
     take_profit: float
     risk_pct: float
     reward_risk_ratio: float
+    method: str = "atr"
+
+
+@dataclass(slots=True)
+class PositionSize:
+    units: int
+    lots: int
+    risk_budget: float
+    actual_risk: float
+    position_value: float
+    capped_by_cash: bool
 
 
 @dataclass(slots=True)
@@ -86,6 +111,7 @@ class GeneratedSignal:
     reward_risk_ratio: float
     rationale: list[str]
     candle_begin: datetime
+    risk_method: str = "atr"
 
 
 class MoexApiError(RuntimeError):
@@ -98,4 +124,3 @@ class UnknownTickerError(ValueError):
 
 class InsufficientDataError(ValueError):
     """There are not enough candles to calculate a reliable signal."""
-

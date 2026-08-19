@@ -6,8 +6,8 @@ from app.analysis import analyze_technical
 from app.config import Settings
 from app.domain import GeneratedSignal, InsufficientDataError, UnknownTickerError
 from app.models import SignalRecord
-from app.repositories import get_candles, get_instrument
-from app.risk import atr_risk_levels
+from app.repositories import get_active_instrument, get_candles
+from app.risk import atr_risk_levels, level_risk_levels
 
 
 class SignalService:
@@ -28,14 +28,23 @@ class SignalService:
     ) -> GeneratedSignal:
         secid = secid.upper()
         async with self.session_factory() as session:
-            instrument = await get_instrument(session, secid)
+            instrument = await get_active_instrument(session, secid)
             if instrument is None:
                 raise UnknownTickerError(f"Неизвестный тикер {secid}")
             candles = await get_candles(session, secid, timeframe, limit=500)
         if not candles:
             raise InsufficientDataError(f"Для {secid} {timeframe} свечи ещё не загружены")
 
-        technical = analyze_technical(candles)
+        weights = (
+            self.settings.technical_score_weights
+            if self.settings.technical_scoring_model == "weighted"
+            else None
+        )
+        technical = analyze_technical(
+            candles,
+            scoring_model=self.settings.technical_scoring_model,
+            weights=weights,
+        )
         threshold = self.settings.signal_threshold
         if technical.score >= threshold:
             action = "BUY"
@@ -46,13 +55,24 @@ class SignalService:
 
         entry = float(candles[-1].close)
         risk_action = action if action in {"BUY", "SELL"} else "BUY"
-        risk = atr_risk_levels(
-            action=risk_action,
-            entry=entry,
-            atr=technical.atr,
-            stop_multiplier=self.settings.atr_stop_multiplier,
-            take_multiplier=self.settings.atr_take_multiplier,
-        )
+        risk = None
+        if self.settings.risk_method == "levels":
+            risk = level_risk_levels(
+                action=risk_action,
+                entry=entry,
+                support_levels=technical.support_levels,
+                resistance_levels=technical.resistance_levels,
+                buffer_pct=self.settings.level_buffer_pct,
+                minimum_reward_risk_ratio=self.settings.minimum_reward_risk_ratio,
+            )
+        if risk is None:
+            risk = atr_risk_levels(
+                action=risk_action,
+                entry=entry,
+                atr=technical.atr,
+                stop_multiplier=self.settings.atr_stop_multiplier,
+                take_multiplier=self.settings.atr_take_multiplier,
+            )
         confidence = min(95.0, 50.0 + abs(technical.score) * 0.45)
         horizon = "intraday" if timeframe in {"5m", "15m", "1h"} else "long_term"
         user_risk = risk_per_trade_pct or self.settings.default_risk_per_trade_pct
@@ -71,6 +91,7 @@ class SignalService:
             reward_risk_ratio=risk.reward_risk_ratio,
             rationale=technical.explanations,
             candle_begin=candles[-1].begin,
+            risk_method=risk.method,
         )
         async with self.session_factory() as session, session.begin():
             session.add(
@@ -103,6 +124,7 @@ def format_signal(signal: GeneratedSignal) -> str:
         if signal.action == "HOLD"
         else ""
     )
+    risk_method = "ATR" if signal.risk_method == "atr" else "уровни S/R"
     return (
         f"{icon} <b>{signal.action} · {signal.secid}</b>\n"
         f"Горизонт: {horizon} · {signal.timeframe}\n"
@@ -111,8 +133,8 @@ def format_signal(signal: GeneratedSignal) -> str:
         f"Вход: <b>{signal.entry_price:.2f}</b>\n"
         f"Stop-loss: <b>{signal.stop_loss:.2f}</b>\n"
         f"Take-profit: <b>{signal.take_profit:.2f}</b>\n"
-        f"R:R: 1:{signal.reward_risk_ratio:.1f} · риск на сделку: {signal.risk_pct:.2f}%\n\n"
+        f"R:R: 1:{signal.reward_risk_ratio:.1f} · метод: {risk_method}\n"
+        f"Риск на сделку: {signal.risk_pct:.2f}%\n\n"
         f"<b>Почему:</b>\n{rationale}{hold_note}\n\n"
         "⚠️ Не является индивидуальной инвестиционной рекомендацией."
     )
-

@@ -167,8 +167,7 @@ class MoexClient:
                         lot_size=int(row["LOTSIZE"]) if row.get("LOTSIZE") else None,
                         last_price=_optional_float(market.get("LAST")),
                         market_cap=_optional_float(
-                            market.get("ISSUECAPITALIZATION")
-                            or row.get("ISSUECAPITALIZATION")
+                            market.get("ISSUECAPITALIZATION") or row.get("ISSUECAPITALIZATION")
                         ),
                         daily_turnover=_optional_float(market.get("VALTODAY")),
                     )

@@ -7,10 +7,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.domain import InstrumentData, UnknownTickerError
+from app.domain import InstrumentData, MoexApiError, UnknownTickerError
 from app.moex import MoexClient
 from app.repositories import (
-    get_instrument,
+    deactivate_instruments_except,
+    get_active_instrument,
     latest_candle_begin,
     list_active_instruments,
     save_orderbook_snapshot,
@@ -68,6 +69,8 @@ class IngestionService:
 
     async def sync_universe(self) -> list[str]:
         items = await self.moex.fetch_instruments("TQBR")
+        if not items:
+            raise MoexApiError("MOEX returned an empty TQBR universe")
         blue_order = {secid: rank for rank, secid in enumerate(self.settings.blue_chip_list)}
         for item in items:
             item.echelon = classify_echelon(item, self.settings)
@@ -80,9 +83,12 @@ class IngestionService:
             )
         )
         selected = eligible[: self.settings.universe_size]
+        if not selected:
+            raise MoexApiError("No instruments matched the configured universe filters")
         async with self._write_lock:
             async with self.session_factory() as session, session.begin():
                 await upsert_instruments(session, selected)
+                await deactivate_instruments_except(session, [item.secid for item in selected])
         logger.info("Universe synced: %s instruments", len(selected))
         return [item.secid for item in selected]
 
@@ -103,9 +109,7 @@ class IngestionService:
             try:
                 async with self._semaphore:
                     for timeframe in self.settings.timeframe_list:
-                        candle_count += await self.sync_candles(
-                            secid, timeframe, board_id=board_id
-                        )
+                        candle_count += await self.sync_candles(secid, timeframe, board_id=board_id)
                     if include_orderbook:
                         try:
                             levels = await self.moex.fetch_orderbook(secid, board_id=board_id)
@@ -138,9 +142,7 @@ class IngestionService:
         async with self.session_factory() as session:
             latest = await latest_candle_begin(session, secid, timeframe)
         date_from = latest - OVERLAP[timeframe] if latest else now - LOOKBACK[timeframe]
-        candles = await self.moex.fetch_candles(
-            secid, timeframe, date_from, board_id=board_id
-        )
+        candles = await self.moex.fetch_candles(secid, timeframe, date_from, board_id=board_id)
         async with self._write_lock:
             async with self.session_factory() as session, session.begin():
                 return await upsert_candles(session, candles)
@@ -148,11 +150,11 @@ class IngestionService:
     async def refresh_ticker(self, secid: str, timeframe: str) -> int:
         secid = secid.upper()
         async with self.session_factory() as session:
-            instrument = await get_instrument(session, secid)
+            instrument = await get_active_instrument(session, secid)
         if instrument is None:
             await self.sync_universe()
             async with self.session_factory() as session:
-                instrument = await get_instrument(session, secid)
+                instrument = await get_active_instrument(session, secid)
         if instrument is None:
             raise UnknownTickerError(f"Тикер {secid} не входит в текущую вселенную MVP")
         async with self._semaphore:

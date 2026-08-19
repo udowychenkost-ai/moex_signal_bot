@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import (
@@ -36,10 +37,10 @@ async def init_db(engine: AsyncEngine) -> None:
         await connection.run_sync(Base.metadata.create_all)
 
 
+@asynccontextmanager
 async def session_scope(
     factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[AsyncSession]:
     async with factory() as session:
         async with session.begin():
             yield session
-

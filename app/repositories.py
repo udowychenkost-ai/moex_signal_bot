@@ -73,13 +73,28 @@ async def list_active_instruments(session: AsyncSession) -> list[Instrument]:
     return list(result)
 
 
+async def deactivate_instruments_except(session: AsyncSession, secids: list[str]) -> int:
+    if not secids:
+        raise ValueError("Refusing to deactivate the complete universe")
+    result = await session.execute(
+        update(Instrument)
+        .where(Instrument.secid.not_in([secid.upper() for secid in secids]))
+        .values(is_active=False)
+    )
+    return int(result.rowcount or 0)
+
+
 async def get_instrument(session: AsyncSession, secid: str) -> Instrument | None:
     return await session.get(Instrument, secid.upper())
 
 
-async def latest_candle_begin(
-    session: AsyncSession, secid: str, timeframe: str
-) -> datetime | None:
+async def get_active_instrument(session: AsyncSession, secid: str) -> Instrument | None:
+    return await session.scalar(
+        select(Instrument).where(Instrument.secid == secid.upper(), Instrument.is_active.is_(True))
+    )
+
+
+async def latest_candle_begin(session: AsyncSession, secid: str, timeframe: str) -> datetime | None:
     return await session.scalar(
         select(func.max(Candle.begin)).where(
             Candle.secid == secid.upper(), Candle.timeframe == timeframe
@@ -109,18 +124,16 @@ async def upsert_candles(session: AsyncSession, candles: list[CandleData]) -> in
     statement = _upsert_statement(session, Candle, values)
     excluded = statement.excluded
     update_values = {
-            "end": excluded.end,
-            "open": excluded.open,
-            "high": excluded.high,
-            "low": excluded.low,
-            "close": excluded.close,
-            "volume": excluded.volume,
-            "value": excluded.value,
+        "end": excluded.end,
+        "open": excluded.open,
+        "high": excluded.high,
+        "low": excluded.low,
+        "close": excluded.close,
+        "volume": excluded.volume,
+        "value": excluded.value,
     }
     if session.bind.dialect.name == "postgresql":
-        statement = statement.on_conflict_do_update(
-            constraint="uq_candle_key", set_=update_values
-        )
+        statement = statement.on_conflict_do_update(constraint="uq_candle_key", set_=update_values)
     else:
         statement = statement.on_conflict_do_update(
             index_elements=["secid", "board_id", "timeframe", "begin"],
@@ -226,13 +239,22 @@ async def get_watchlist(session: AsyncSession, telegram_id: int) -> list[str]:
     return list(result)
 
 
-async def list_subscriptions(session: AsyncSession) -> list[tuple[int, str, str]]:
+async def list_subscriptions(session: AsyncSession) -> list[tuple[int, str, str, float]]:
     rows = await session.execute(
-        select(WatchlistItem.telegram_id, WatchlistItem.secid, TelegramUser.default_timeframe)
+        select(
+            WatchlistItem.telegram_id,
+            WatchlistItem.secid,
+            TelegramUser.default_timeframe,
+            TelegramUser.risk_per_trade_pct,
+        )
         .join(TelegramUser, TelegramUser.telegram_id == WatchlistItem.telegram_id)
-        .where(TelegramUser.is_active.is_(True))
+        .join(Instrument, Instrument.secid == WatchlistItem.secid)
+        .where(
+            TelegramUser.is_active.is_(True),
+            Instrument.is_active.is_(True),
+        )
     )
-    return [(int(row[0]), str(row[1]), str(row[2])) for row in rows]
+    return [(int(row[0]), str(row[1]), str(row[2]), float(row[3])) for row in rows]
 
 
 async def update_user_settings(
@@ -253,9 +275,7 @@ async def update_user_settings(
         )
 
 
-async def latest_signal(
-    session: AsyncSession, secid: str, timeframe: str
-) -> SignalRecord | None:
+async def latest_signal(session: AsyncSession, secid: str, timeframe: str) -> SignalRecord | None:
     return await session.scalar(
         select(SignalRecord)
         .where(SignalRecord.secid == secid.upper(), SignalRecord.timeframe == timeframe)

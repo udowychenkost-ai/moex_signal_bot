@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,8 +41,17 @@ class Settings(BaseSettings):
     echelon2_min_daily_turnover: float = 25_000_000
 
     signal_threshold: float = Field(default=25.0, ge=0, le=100)
+    technical_scoring_model: Literal["weighted", "legacy"] = "legacy"
+    score_weight_trend: float = Field(default=25.0, ge=0)
+    score_weight_momentum: float = Field(default=25.0, ge=0)
+    score_weight_macd: float = Field(default=20.0, ge=0)
+    score_weight_bollinger: float = Field(default=15.0, ge=0)
+    score_weight_volume: float = Field(default=15.0, ge=0)
     atr_stop_multiplier: float = Field(default=1.5, gt=0)
     atr_take_multiplier: float = Field(default=3.0, gt=0)
+    risk_method: Literal["atr", "levels"] = "atr"
+    level_buffer_pct: float = Field(default=0.3, ge=0, le=10)
+    minimum_reward_risk_ratio: float = Field(default=2.0, ge=1)
     default_risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10)
 
     @field_validator("default_timeframe")
@@ -68,6 +78,20 @@ class Settings(BaseSettings):
                 item.strip().upper() for item in self.blue_chip_tickers.split(",") if item
             )
         )
+
+    @property
+    def technical_score_weights(self) -> dict[str, float]:
+        weights = {
+            "trend": self.score_weight_trend,
+            "momentum": self.score_weight_momentum,
+            "macd": self.score_weight_macd,
+            "bollinger": self.score_weight_bollinger,
+            "volume": self.score_weight_volume,
+        }
+        total = sum(weights.values())
+        if total <= 0:
+            raise ValueError("At least one technical score weight must be positive")
+        return {name: weight / total * 100 for name, weight in weights.items()}
 
 
 @lru_cache
