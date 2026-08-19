@@ -11,9 +11,13 @@ from aiogram.enums import ParseMode
 from app.bot import BotServices, create_router
 from app.config import get_settings
 from app.db import create_engine_and_session, init_db
+from app.idea_tracker import IdeaTracker
+from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
 from app.logging_config import configure_logging
 from app.moex import MoexClient
+from app.reporting import ReportingService
+from app.scanner import MarketScanner
 from app.scheduler import ScheduledJobs, build_scheduler
 from app.signals import SignalService
 
@@ -62,8 +66,15 @@ async def run_bot() -> None:
         ) as moex:
             ingestion = IngestionService(settings, session_factory, moex)
             signals = SignalService(settings, session_factory)
-            services = BotServices(settings, session_factory, ingestion, signals)
-            jobs = ScheduledJobs(settings, session_factory, ingestion, signals, bot)
+            ideas = TradingIdeaGenerator(settings, session_factory, signals)
+            tracker = IdeaTracker(session_factory)
+            reporting = ReportingService(
+                session_factory,
+                timezone=settings.scheduler_timezone,
+            )
+            scanner = MarketScanner(session_factory, ingestion, ideas, tracker)
+            services = BotServices(settings, session_factory, ingestion, signals, reporting)
+            jobs = ScheduledJobs(settings, scanner, reporting, bot)
             scheduler = build_scheduler(settings, jobs)
             scheduler.start()
 

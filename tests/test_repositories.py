@@ -4,6 +4,7 @@ import pytest
 
 from app.db import create_engine_and_session, init_db
 from app.domain import CandleData, InstrumentData
+from app.models import TelegramUser
 from app.repositories import (
     add_watchlist_item,
     deactivate_instruments_except,
@@ -11,6 +12,7 @@ from app.repositories import (
     get_candles,
     list_active_instruments,
     list_subscriptions,
+    update_user_settings,
     upsert_candles,
     upsert_instruments,
 )
@@ -85,4 +87,28 @@ async def test_subscriptions_include_each_users_risk_setting() -> None:
     async with factory() as session:
         subscriptions = await list_subscriptions(session)
     assert subscriptions == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_report_preferences_are_persisted_separately_from_strategy() -> None:
+    engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    async with factory() as session, session.begin():
+        await ensure_user(session, 42, "user", "15m", 1.0)
+        await update_user_settings(
+            session,
+            42,
+            report_frequency="3h",
+            idea_horizon="SWING_5D",
+            risk_pct=2.0,
+            minimum_confidence=80,
+        )
+    async with factory() as session:
+        user = await session.get(TelegramUser, 42)
+    assert user is not None
+    assert user.report_frequency == "3h"
+    assert user.idea_horizon == "SWING_5D"
+    assert user.risk_per_trade_pct == 2.0
+    assert user.minimum_confidence == 80
     await engine.dispose()

@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import IdeaDirection, IdeaStatus, TradingIdeaData
-from app.models import TradingIdea, TradingIdeaEvent
+from app.models import IdeaNotification, TradingIdea, TradingIdeaEvent
 
 OPEN_IDEA_STATUSES = (IdeaStatus.PENDING_ENTRY.value, IdeaStatus.ACTIVE.value)
 
@@ -246,6 +246,62 @@ async def list_open_ideas(
         )
     )
     return list(rows)
+
+
+async def get_idea(session: AsyncSession, idea_id: int) -> TradingIdea | None:
+    return await session.get(TradingIdea, idea_id)
+
+
+async def list_unnotified_ideas(
+    session: AsyncSession,
+    *,
+    telegram_id: int,
+    horizon: str,
+    minimum_confidence: float,
+    limit: int = 20,
+) -> list[TradingIdea]:
+    current_version_sent = exists().where(
+        IdeaNotification.telegram_id == telegram_id,
+        IdeaNotification.idea_id == TradingIdea.id,
+        IdeaNotification.idea_version == TradingIdea.version,
+    )
+    previously_sent = exists().where(
+        IdeaNotification.telegram_id == telegram_id,
+        IdeaNotification.idea_id == TradingIdea.id,
+    )
+    statement = select(TradingIdea).where(
+        TradingIdea.confidence >= minimum_confidence,
+        ~current_version_sent,
+        (TradingIdea.status.in_(OPEN_IDEA_STATUSES) | previously_sent),
+    )
+    if horizon != "all":
+        statement = statement.where(TradingIdea.horizon == horizon)
+    result = await session.scalars(
+        statement.order_by(TradingIdea.confidence.desc(), TradingIdea.updated_at.desc()).limit(
+            limit
+        )
+    )
+    return list(result)
+
+
+async def mark_ideas_notified(
+    session: AsyncSession,
+    telegram_id: int,
+    ideas: list[TradingIdea],
+    *,
+    sent_at: datetime,
+) -> None:
+    session.add_all(
+        [
+            IdeaNotification(
+                telegram_id=telegram_id,
+                idea_id=idea.id,
+                idea_version=idea.version,
+                sent_at=sent_at,
+            )
+            for idea in ideas
+        ]
+    )
 
 
 def idea_direction(idea: TradingIdea) -> IdeaDirection:

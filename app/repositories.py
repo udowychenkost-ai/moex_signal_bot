@@ -213,6 +213,9 @@ async def ensure_user(
     username: str | None,
     default_timeframe: str,
     default_risk_pct: float,
+    default_report_frequency: str = "hourly",
+    default_idea_horizon: str = "all",
+    default_minimum_confidence: float = 70.0,
 ) -> TelegramUser:
     user = await session.get(TelegramUser, telegram_id)
     if user is None:
@@ -221,6 +224,9 @@ async def ensure_user(
             username=username,
             default_timeframe=default_timeframe,
             risk_per_trade_pct=default_risk_pct,
+            report_frequency=default_report_frequency,
+            idea_horizon=default_idea_horizon,
+            minimum_confidence=default_minimum_confidence,
         )
         session.add(user)
     else:
@@ -284,16 +290,49 @@ async def update_user_settings(
     *,
     timeframe: str | None = None,
     risk_pct: float | None = None,
+    report_frequency: str | None = None,
+    idea_horizon: str | None = None,
+    minimum_confidence: float | None = None,
 ) -> None:
     values: dict[str, object] = {}
     if timeframe is not None:
         values["default_timeframe"] = timeframe
     if risk_pct is not None:
         values["risk_per_trade_pct"] = risk_pct
+    if report_frequency is not None:
+        values["report_frequency"] = report_frequency
+    if idea_horizon is not None:
+        values["idea_horizon"] = idea_horizon
+    if minimum_confidence is not None:
+        values["minimum_confidence"] = minimum_confidence
     if values:
         await session.execute(
             update(TelegramUser).where(TelegramUser.telegram_id == telegram_id).values(**values)
         )
+
+
+async def list_report_users(session: AsyncSession) -> list[TelegramUser]:
+    rows = await session.scalars(
+        select(TelegramUser)
+        .where(
+            TelegramUser.is_active.is_(True),
+            TelegramUser.report_frequency != "off",
+        )
+        .order_by(TelegramUser.telegram_id)
+    )
+    return list(rows)
+
+
+async def mark_report_sent(
+    session: AsyncSession,
+    telegram_id: int,
+    sent_at: datetime,
+) -> None:
+    await session.execute(
+        update(TelegramUser)
+        .where(TelegramUser.telegram_id == telegram_id)
+        .values(last_report_at=sent_at)
+    )
 
 
 async def latest_signal(session: AsyncSession, secid: str, timeframe: str) -> SignalRecord | None:
