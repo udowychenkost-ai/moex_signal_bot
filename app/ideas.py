@@ -90,6 +90,8 @@ def build_trading_idea(
     horizon: IdeaHorizon,
     signals: list[GeneratedSignal],
     now: datetime | None = None,
+    fundamental_score: float | None = None,
+    news_score: float | None = None,
 ) -> TradingIdeaData | None:
     profile = get_horizon_profile(horizon)
     by_timeframe = {signal.timeframe: signal for signal in signals}
@@ -112,14 +114,27 @@ def build_trading_idea(
         )
         / weight_total
     )
-    if technical_score >= settings.signal_threshold:
+    factor_values = {"technical": technical_score}
+    factor_weights = {"technical": profile.technical_weight}
+    if fundamental_score is not None:
+        factor_values["fundamental"] = fundamental_score
+        factor_weights["fundamental"] = profile.fundamental_weight
+    if news_score is not None:
+        factor_values["news"] = news_score
+        factor_weights["news"] = profile.news_weight
+    available_factor_weight = sum(factor_weights.values())
+    total_score = (
+        sum(factor_values[name] * factor_weights[name] for name in factor_values)
+        / available_factor_weight
+    )
+    if total_score >= settings.signal_threshold:
         direction = IdeaDirection.BUY
-    elif technical_score <= -settings.signal_threshold:
+    elif total_score <= -settings.signal_threshold:
         direction = IdeaDirection.SELL
     else:
         return None
 
-    confidence = min(95.0, 50.0 + abs(technical_score) * 0.45)
+    confidence = min(95.0, 50.0 + abs(total_score) * 0.45)
     minimum_confidence = max(settings.idea_minimum_confidence, profile.minimum_confidence)
     if confidence < minimum_confidence:
         return None
@@ -131,7 +146,7 @@ def build_trading_idea(
         atr=primary.atr,
         support_levels=primary.support_levels,
         resistance_levels=primary.resistance_levels,
-        zone_atr=settings.idea_entry_zone_atr or profile.entry_zone_atr,
+        zone_atr=profile.entry_zone_atr,
     )
     reference_entry = entry_to if direction == IdeaDirection.BUY else entry_from
     risk = None
@@ -198,6 +213,10 @@ def build_trading_idea(
         source_signal_id=primary.record_id,
         source_timeframes=list(available),
         source_candle_begin=primary.candle_begin,
+        technical_score=round(technical_score, 4),
+        fundamental_score=round(fundamental_score or 0.0, 4),
+        news_score=round(news_score or 0.0, 4),
+        total_score=round(total_score, 4),
     )
 
 

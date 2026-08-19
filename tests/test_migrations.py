@@ -43,5 +43,9 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch
         "version",
         "last_evaluated_at",
         "activation_price",
+        "technical_score",
+        "fundamental_score",
+        "news_score",
+        "total_score",
     }.issubset(idea_columns)
-    assert revision == ("20260819_0005",)
+    assert revision == ("20260819_0006",)

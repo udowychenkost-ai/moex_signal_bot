@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     default_risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10)
     idea_minimum_confidence: float = Field(default=60.0, ge=50, le=95)
     idea_material_confidence_delta: float = Field(default=7.5, ge=1, le=50)
-    idea_entry_zone_atr: float = Field(default=0.35, gt=0, le=3)
     default_report_frequency: Literal["hourly", "3h", "daily", "strong", "off"] = "hourly"
     default_idea_horizon: Literal["INTRADAY_1D", "SWING_5D", "POSITION_1M", "all"] = "all"
     default_minimum_confidence: float = Field(default=70.0, ge=50, le=95)
@@ -78,6 +77,11 @@ class Settings(BaseSettings):
         if invalid:
             raise ValueError(f"Unsupported timeframes: {', '.join(sorted(invalid))}")
         return result
+
+    @property
+    def analysis_timeframe_list(self) -> list[str]:
+        required = ["15m", "1h", "4h", "1d", "1w"]
+        return list(dict.fromkeys([*self.timeframe_list, *required]))
 
     @property
     def blue_chip_list(self) -> list[str]:

@@ -137,6 +137,39 @@ def test_weak_or_incomplete_signal_does_not_become_an_idea() -> None:
     )
 
 
+def test_missing_optional_factors_preserve_technical_score() -> None:
+    idea = build_trading_idea(
+        Settings(_env_file=None),
+        instrument_name="Сбербанк",
+        horizon=IdeaHorizon.INTRADAY_1D,
+        signals=[signal("15m", 60), signal("1h", 60), signal("1d", 60)],
+        now=NOW,
+    )
+
+    assert idea is not None
+    assert idea.technical_score == pytest.approx(60)
+    assert idea.fundamental_score == 0
+    assert idea.news_score == 0
+    assert idea.total_score == pytest.approx(60)
+
+
+def test_available_fundamental_and_news_factors_use_horizon_weights() -> None:
+    idea = build_trading_idea(
+        Settings(_env_file=None),
+        instrument_name="Сбербанк",
+        horizon=IdeaHorizon.POSITION_1M,
+        signals=[signal("4h", 20), signal("1d", 20), signal("1w", 20)],
+        fundamental_score=100,
+        news_score=100,
+        now=NOW,
+    )
+
+    assert idea is not None
+    assert idea.direction == IdeaDirection.BUY
+    assert idea.technical_score == pytest.approx(20)
+    assert idea.total_score == pytest.approx(52)
+
+
 @pytest.mark.asyncio
 async def test_repository_deduplicates_and_versions_material_updates() -> None:
     engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")

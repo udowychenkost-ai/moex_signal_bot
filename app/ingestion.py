@@ -110,7 +110,7 @@ class IngestionService:
             error_count = 0
             try:
                 async with self._semaphore:
-                    for timeframe in self.settings.timeframe_list:
+                    for timeframe in self.settings.analysis_timeframe_list:
                         candle_count += await self.sync_candles(secid, timeframe, board_id=board_id)
                     if include_orderbook:
                         try:

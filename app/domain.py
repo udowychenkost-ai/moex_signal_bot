@@ -231,6 +231,10 @@ class TradingIdeaData:
     last_evaluated_at: datetime | None = None
     id: int | None = None
     version: int = 1
+    technical_score: float = 0.0
+    fundamental_score: float = 0.0
+    news_score: float = 0.0
+    total_score: float = 0.0
 
     @property
     def entry_state(self) -> EntryState:
