@@ -219,6 +219,7 @@ class TradingIdeaData:
     closed_at: datetime | None = None
     close_reason: str | None = None
     close_price: float | None = None
+    last_evaluated_at: datetime | None = None
     id: int | None = None
     version: int = 1
 
@@ -229,6 +230,15 @@ class TradingIdeaData:
         if self.status == IdeaStatus.ACTIVE:
             return EntryState.ENTRY_AVAILABLE
         return EntryState.MISSED_INVALID
+
+
+@dataclass(frozen=True, slots=True)
+class IdeaTransition:
+    to_status: IdeaStatus
+    event_type: str
+    price: float
+    reason: str
+    occurred_at: datetime
 
 
 class MoexApiError(RuntimeError):

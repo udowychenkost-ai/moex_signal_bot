@@ -41,6 +41,7 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
         "source_signal_id": data.source_signal_id,
         "source_timeframes": ",".join(data.source_timeframes),
         "source_candle_begin": data.source_candle_begin,
+        "last_evaluated_at": data.last_evaluated_at or data.source_candle_begin,
         "material_hash": material_hash,
         "version": data.version,
         "created_at": data.created_at,
@@ -55,6 +56,12 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
 
 def _relative_change(old: float, new: float) -> float:
     return abs(new - old) / abs(old) if old else abs(new - old)
+
+
+def _same_moment(left: datetime, right: datetime) -> bool:
+    normalized_left = left.replace(tzinfo=UTC) if left.tzinfo is None else left.astimezone(UTC)
+    normalized_right = right.replace(tzinfo=UTC) if right.tzinfo is None else right.astimezone(UTC)
+    return normalized_left == normalized_right
 
 
 def _is_material_change(
@@ -87,6 +94,19 @@ async def get_open_idea(
             TradingIdea.horizon == horizon,
             TradingIdea.status.in_(OPEN_IDEA_STATUSES),
         )
+        .order_by(TradingIdea.created_at.desc())
+        .limit(1)
+    )
+
+
+async def get_latest_idea(
+    session: AsyncSession,
+    ticker: str,
+    horizon: str,
+) -> TradingIdea | None:
+    return await session.scalar(
+        select(TradingIdea)
+        .where(TradingIdea.ticker == ticker.upper(), TradingIdea.horizon == horizon)
         .order_by(TradingIdea.created_at.desc())
         .limit(1)
     )
@@ -145,6 +165,15 @@ async def create_or_update_idea(
         existing = None
 
     if existing is None:
+        latest = await get_latest_idea(session, data.ticker, data.horizon.value)
+        if latest is not None and _same_moment(
+            latest.source_candle_begin, data.source_candle_begin
+        ):
+            return IdeaUpsertResult(
+                idea=latest,
+                created=False,
+                materially_changed=False,
+            )
         idea = TradingIdea(**_model_values(data, material_hash))
         session.add(idea)
         await session.flush()

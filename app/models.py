@@ -164,6 +164,9 @@ class TradingIdea(Base):
     )
     source_timeframes: Mapped[str] = mapped_column(String(64))
     source_candle_begin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     material_hash: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

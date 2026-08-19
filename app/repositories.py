@@ -159,6 +159,27 @@ async def get_candles(
     return list(reversed(list(result)))
 
 
+async def get_candles_after(
+    session: AsyncSession,
+    secid: str,
+    timeframe: str,
+    after: datetime,
+    *,
+    limit: int = 2_000,
+) -> list[Candle]:
+    result = await session.scalars(
+        select(Candle)
+        .where(
+            Candle.secid == secid.upper(),
+            Candle.timeframe == timeframe,
+            Candle.begin > after,
+        )
+        .order_by(Candle.begin.asc())
+        .limit(limit)
+    )
+    return list(result)
+
+
 async def save_orderbook_snapshot(
     session: AsyncSession, levels: list[OrderBookLevelData], retention_hours: int = 24
 ) -> int:

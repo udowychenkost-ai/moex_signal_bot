@@ -40,5 +40,6 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch
         "stop_loss",
         "source_signal_id",
         "version",
+        "last_evaluated_at",
     }.issubset(idea_columns)
-    assert revision == ("20260819_0002",)
+    assert revision == ("20260819_0003",)
