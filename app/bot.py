@@ -21,7 +21,7 @@ from app.repositories import (
 )
 from app.signals import SignalService, format_signal
 
-ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "1d", "1w"}
+ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w"}
 
 
 @dataclass(slots=True)
@@ -78,7 +78,7 @@ def create_router(services: BotServices) -> Router:
         secid = tokens[1].upper()
         timeframe = tokens[2].lower() if len(tokens) > 2 else user.default_timeframe
         if timeframe not in ALLOWED_TIMEFRAMES:
-            await message.answer("Интервал: 5m, 15m, 1h, 1d или 1w")
+            await message.answer("Интервал: 5m, 15m, 1h, 4h, 1d или 1w")
             return
         status = await message.answer(f"Обновляю {secid} · {timeframe}…")
         try:

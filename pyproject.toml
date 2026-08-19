@@ -9,6 +9,7 @@ description = "Telegram trading signal bot backed by MOEX ISS"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "alembic>=1.14,<2",
   "aiogram>=3.15,<4",
   "aiosqlite>=0.20,<1",
   "apscheduler>=3.10,<4",

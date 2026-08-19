@@ -25,6 +25,7 @@ LOOKBACK = {
     "5m": timedelta(days=3),
     "15m": timedelta(days=7),
     "1h": timedelta(days=120),
+    "4h": timedelta(days=500),
     "1d": timedelta(days=500),
     "1w": timedelta(days=1800),
 }
@@ -32,6 +33,7 @@ OVERLAP = {
     "5m": timedelta(days=1),
     "15m": timedelta(days=1),
     "1h": timedelta(days=3),
+    "4h": timedelta(days=14),
     "1d": timedelta(days=7),
     "1w": timedelta(days=21),
 }

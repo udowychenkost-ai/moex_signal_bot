@@ -51,6 +51,41 @@ async def test_minute_candles_are_resampled_to_fifteen_minutes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hourly_candles_are_resampled_to_four_hours() -> None:
+    columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+    rows = [
+        [100 + hour, 101 + hour, 102 + hour, 99 + hour, 1000, 10, begin, end]
+        for hour, begin, end in [
+            (0, "2025-01-10 10:00:00", "2025-01-10 10:59:59"),
+            (1, "2025-01-10 11:00:00", "2025-01-10 11:59:59"),
+            (2, "2025-01-10 12:00:00", "2025-01-10 12:59:59"),
+            (3, "2025-01-10 13:00:00", "2025-01-10 13:59:59"),
+        ]
+    ]
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candles": {"columns": columns, "data": rows},
+                "candles.cursor": {
+                    "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                    "data": [[0, 4, 100]],
+                },
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_candles("SBER", "4h", datetime(2025, 1, 10, tzinfo=UTC))
+    assert len(result) == 2
+    assert result[0].open == 100
+    assert result[0].close == 102
+    assert result[0].volume == 20
+
+
+@pytest.mark.asyncio
 async def test_no_cursor_pagination_uses_offset_and_stops_on_empty_page() -> None:
     calls: list[int] = []
 

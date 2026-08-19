@@ -53,18 +53,25 @@ class Settings(BaseSettings):
     level_buffer_pct: float = Field(default=0.3, ge=0, le=10)
     minimum_reward_risk_ratio: float = Field(default=2.0, ge=1)
     default_risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10)
+    idea_minimum_confidence: float = Field(default=60.0, ge=50, le=95)
+    idea_material_confidence_delta: float = Field(default=7.5, ge=1, le=50)
+    idea_entry_zone_atr: float = Field(default=0.35, gt=0, le=3)
+    default_report_frequency: Literal["hourly", "3h", "daily", "strong", "off"] = "hourly"
+    default_idea_horizon: Literal["INTRADAY_1D", "SWING_5D", "POSITION_1M", "all"] = "all"
+    default_minimum_confidence: float = Field(default=70.0, ge=50, le=95)
+    paper_account_size: float = Field(default=1_000_000.0, gt=0)
 
     @field_validator("default_timeframe")
     @classmethod
     def validate_default_timeframe(cls, value: str) -> str:
         value = value.strip().lower()
-        if value not in {"5m", "15m", "1h", "1d", "1w"}:
-            raise ValueError("default_timeframe must be one of 5m, 15m, 1h, 1d, 1w")
+        if value not in {"5m", "15m", "1h", "4h", "1d", "1w"}:
+            raise ValueError("default_timeframe must be one of 5m, 15m, 1h, 4h, 1d, 1w")
         return value
 
     @property
     def timeframe_list(self) -> list[str]:
-        allowed = {"5m", "15m", "1h", "1d", "1w"}
+        allowed = {"5m", "15m", "1h", "4h", "1d", "1w"}
         result = list(dict.fromkeys(item.strip().lower() for item in self.timeframes.split(",")))
         invalid = set(result) - allowed
         if invalid:

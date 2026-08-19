@@ -17,10 +17,11 @@ SOURCE_INTERVALS = {
     "5m": 1,
     "15m": 1,
     "1h": 60,
+    "4h": 60,
     "1d": 24,
     "1w": 7,
 }
-RESAMPLE_RULES = {"5m": "5min", "15m": "15min"}
+RESAMPLE_RULES = {"5m": "5min", "15m": "15min", "4h": "4h"}
 
 
 def _rows(payload: dict[str, Any], block: str) -> list[dict[str, Any]]:
