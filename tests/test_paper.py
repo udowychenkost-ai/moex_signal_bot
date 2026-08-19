@@ -53,7 +53,9 @@ async def test_paper_trade_follows_published_idea_lifecycle_idempotently() -> No
         _env_file=None,
         paper_account_size=100_000,
         default_risk_per_trade_pct=1,
-        backtest_commission_pct=0.05,
+        paper_commission_pct=0.05,
+        paper_buy_slippage_bps=10,
+        paper_sell_slippage_bps=20,
     )
     paper = PaperTradingService(settings, factory)
     opened = await paper.sync_idea(idea_id)
@@ -79,6 +81,9 @@ async def test_paper_trade_follows_published_idea_lifecycle_idempotently() -> No
     assert closed.status == "CLOSED"
     assert closed.net_pnl > 0
     assert closed.commission > 0
+    assert closed.slippage > 0
+    assert closed.entry_fill_price > closed.entry_price
+    assert closed.exit_fill_price < closed.exit_price
     assert closed.r_multiple > 0
     assert summary.closed_trades == 1
     assert summary.wins == 1

@@ -30,6 +30,7 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         }
         user_columns = {row[1] for row in connection.execute("PRAGMA table_info(telegram_users)")}
         idea_columns = {row[1] for row in connection.execute("PRAGMA table_info(trading_ideas)")}
+        paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
     assert {
@@ -56,7 +57,8 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "news_score",
         "total_score",
     }.issubset(idea_columns)
-    assert revision == ("20260819_0006",)
+    assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
+    assert revision == ("20260819_0007",)
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -76,7 +78,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260819_0006",)
+    assert revision == ("20260819_0007",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -87,4 +89,4 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260819_0006",)
+    assert revision == ("20260819_0007",)

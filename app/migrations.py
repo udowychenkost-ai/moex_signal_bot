@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260819_0006"
+HEAD_REVISION = "20260819_0007"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -30,6 +30,7 @@ BASELINE_TABLES = {
 class SchemaSnapshot:
     tables: frozenset[str]
     idea_columns: frozenset[str]
+    paper_columns: frozenset[str]
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -52,7 +53,16 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                     if "trading_ideas" in tables
                     else frozenset()
                 )
-                return SchemaSnapshot(tables=tables, idea_columns=idea_columns)
+                paper_columns = (
+                    frozenset(column["name"] for column in inspector.get_columns("paper_trades"))
+                    if "paper_trades" in tables
+                    else frozenset()
+                )
+                return SchemaSnapshot(
+                    tables=tables,
+                    idea_columns=idea_columns,
+                    paper_columns=paper_columns,
+                )
 
             return await connection.run_sync(inspect_schema)
     finally:
@@ -74,8 +84,15 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
 
     columns = snapshot.idea_columns
     factor_columns = {"technical_score", "fundamental_score", "news_score", "total_score"}
-    if "paper_trades" in snapshot.tables and factor_columns.issubset(columns):
+    execution_columns = {"entry_fill_price", "exit_fill_price", "slippage"}
+    if (
+        "paper_trades" in snapshot.tables
+        and factor_columns.issubset(columns)
+        and execution_columns.issubset(snapshot.paper_columns)
+    ):
         return HEAD_REVISION
+    if "paper_trades" in snapshot.tables and factor_columns.issubset(columns):
+        return "20260819_0006"
     if "paper_trades" in snapshot.tables:
         return "20260819_0005"
     if "activation_price" in columns:

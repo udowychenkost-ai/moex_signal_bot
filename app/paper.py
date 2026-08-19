@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.domain import IdeaStatus
 from app.models import Instrument, PaperTrade, TradingIdea
-from app.risk import calculate_position_size, calculate_trade_pnl
+from app.risk import apply_slippage, calculate_position_size, calculate_trade_pnl
 
 TERMINAL_IDEA_STATUSES = {
     IdeaStatus.TP_HIT.value,
@@ -59,11 +59,25 @@ class PaperTradingService:
             if trade is None:
                 instrument = await session.get(Instrument, idea.ticker)
                 equity = await self._equity(session)
+                entry_side = idea.direction
+                exit_side = "SELL" if idea.direction == "BUY" else "BUY"
+                entry_fill = apply_slippage(
+                    idea.activation_price,
+                    order_side=entry_side,
+                    buy_slippage_bps=self.settings.paper_buy_slippage_bps,
+                    sell_slippage_bps=self.settings.paper_sell_slippage_bps,
+                )
+                stop_fill = apply_slippage(
+                    idea.stop_loss,
+                    order_side=exit_side,
+                    buy_slippage_bps=self.settings.paper_buy_slippage_bps,
+                    sell_slippage_bps=self.settings.paper_sell_slippage_bps,
+                )
                 size = calculate_position_size(
                     deposit=equity,
                     risk_per_trade_pct=self.settings.default_risk_per_trade_pct,
-                    entry=idea.activation_price,
-                    stop_loss=idea.stop_loss,
+                    entry=entry_fill,
+                    stop_loss=stop_fill,
                     lot_size=instrument.lot_size if instrument and instrument.lot_size else 1,
                 )
                 trade = PaperTrade(
@@ -72,6 +86,7 @@ class PaperTradingService:
                     direction=idea.direction,
                     status="OPEN",
                     entry_price=idea.activation_price,
+                    entry_fill_price=entry_fill,
                     units=size.units,
                     lots=size.lots,
                     risk_budget=size.risk_budget,
@@ -93,13 +108,18 @@ class PaperTradingService:
                     entry_price=trade.entry_price,
                     exit_price=idea.close_price,
                     units=trade.units,
-                    commission_pct=self.settings.backtest_commission_pct,
+                    commission_pct=self.settings.paper_commission_pct,
                     actual_risk=trade.actual_risk,
+                    buy_slippage_bps=self.settings.paper_buy_slippage_bps,
+                    sell_slippage_bps=self.settings.paper_sell_slippage_bps,
                 )
                 trade.status = "CLOSED"
                 trade.exit_price = idea.close_price
+                trade.entry_fill_price = pnl.entry_fill_price
+                trade.exit_fill_price = pnl.exit_fill_price
                 trade.gross_pnl = pnl.gross_pnl
                 trade.commission = pnl.commission
+                trade.slippage = pnl.slippage
                 trade.net_pnl = pnl.net_pnl
                 trade.r_multiple = pnl.r_multiple
                 trade.closed_at = idea.closed_at
