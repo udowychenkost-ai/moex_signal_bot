@@ -46,11 +46,15 @@ async def test_signal_service_generates_and_persists_weighted_signal() -> None:
         risk_method="levels",
     )
     generated = await SignalService(settings, factory).generate("sber", "1d")
+    duplicate = await SignalService(settings, factory).generate("sber", "1d")
 
     assert generated.secid == "SBER"
     assert generated.action in {"BUY", "SELL", "HOLD"}
     assert generated.risk_method in {"levels", "atr"}
     assert generated.rationale
+    assert generated.record_id is not None
+    assert duplicate.record_id == generated.record_id
+    assert generated.atr is not None
     assert generated.stop_loss < generated.entry_price < generated.take_profit
     assert "Не является индивидуальной инвестиционной рекомендацией" in format_signal(generated)
     async with factory() as session:

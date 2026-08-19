@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,6 +13,14 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Base
+
+
+def _enable_sqlite_foreign_keys(dbapi_connection: object, _: object) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
 
 
 def _ensure_sqlite_directory(database_url: str) -> None:
@@ -29,6 +38,8 @@ def create_engine_and_session(
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     _ensure_sqlite_directory(database_url)
     engine = create_async_engine(database_url, pool_pre_ping=True)
+    if database_url.startswith("sqlite+aiosqlite:"):
+        event.listen(engine.sync_engine, "connect", _enable_sqlite_foreign_keys)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
