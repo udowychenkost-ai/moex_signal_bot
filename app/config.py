@@ -80,8 +80,8 @@ class Settings(BaseSettings):
 
     @property
     def analysis_timeframe_list(self) -> list[str]:
-        required = ["15m", "1h", "4h", "1d", "1w"]
-        return list(dict.fromkeys([*self.timeframe_list, *required]))
+        required = ["5m", "15m", "1h", "4h", "1d", "1w"]
+        return list(dict.fromkeys([*required, *self.timeframe_list]))
 
     @property
     def blue_chip_list(self) -> list[str]:

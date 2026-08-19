@@ -7,7 +7,13 @@ from app.domain import HorizonProfile, IdeaHorizon
 HORIZON_PROFILES: dict[IdeaHorizon, HorizonProfile] = {
     IdeaHorizon.INTRADAY_1D: HorizonProfile(
         horizon=IdeaHorizon.INTRADAY_1D,
-        timeframe_weights={"15m": 0.5, "1h": 0.35, "1d": 0.15},
+        timeframe_weights={
+            "5m": 0.15,
+            "15m": 0.35,
+            "1h": 0.3,
+            "4h": 0.15,
+            "1d": 0.05,
+        },
         primary_timeframe="15m",
         technical_weight=0.9,
         fundamental_weight=0.08,

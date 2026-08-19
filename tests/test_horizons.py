@@ -23,6 +23,14 @@ def test_position_profile_does_not_use_minute_timeframes() -> None:
     assert profile.timeframe_weights["1d"] > profile.timeframe_weights["4h"]
 
 
+def test_intraday_profile_combines_execution_and_context_timeframes() -> None:
+    profile = get_horizon_profile(IdeaHorizon.INTRADAY_1D)
+
+    assert {"5m", "15m", "1h"}.issubset(profile.timeframe_weights)
+    assert {"4h", "1d"}.issubset(profile.timeframe_weights)
+    assert profile.timeframe_weights["15m"] > profile.timeframe_weights["1d"]
+
+
 def test_invalid_profile_rejects_inconsistent_configuration() -> None:
     with pytest.raises(ValueError, match="primary_timeframe"):
         HorizonProfile(
