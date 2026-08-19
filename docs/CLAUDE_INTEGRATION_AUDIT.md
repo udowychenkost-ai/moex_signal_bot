@@ -72,9 +72,10 @@ signal engine, config и risk engine. Их одновременное сохра
 - `session_scope` стал настоящим async context manager;
 - не перенесены import-time Bot, sync I/O в event loop и альтернативные DB tables.
 
-Остающийся production-риск: миграции Alembic ещё не настроены. Также индикаторные
-веса и порог являются инженерными начальными значениями и должны быть
-откалиброваны на out-of-sample backtest до использования с реальным капиталом.
+Alembic и автоматическое принятие распознанных legacy-схем были добавлены на
+следующем этапе roadmap. Индикаторные веса и порог остаются инженерными
+начальными значениями и должны быть откалиброваны на out-of-sample backtest до
+использования с реальным капиталом.
 
 ## Проверка происхождения и лицензий
 
@@ -101,7 +102,7 @@ third-party source в архиве не было. Следовательно, о
 5. Усилить Docker-конфигурацию, тесты и документацию.
 6. Удалить `_claude_candidate`, прогнать полный verification gate.
 
-## Итоговая верификация
+## Верификация merge checkpoint до TradingIdea roadmap
 
 - `pytest`: 30 passed;
 - Ruff lint и format check: passed;
@@ -115,3 +116,21 @@ third-party source в архиве не было. Следовательно, о
 
 Type checker в проекте не настроен. Telegram polling не запускался без реального
 `TELEGRAM_BOT_TOKEN`, чтобы не выполнять внешние действия от имени пользователя.
+
+## Состояние после TradingIdea roadmap
+
+После завершения merge поверх сохранённой архитектуры добавлены одна модель
+`TradingIdea`, три конфигурационных horizon profile, entry zone, lifecycle
+tracker, Telegram reports/settings, deduplication, production-pipeline backtest,
+paper trading и Alembic revisions `20260819_0001`–`20260819_0006`.
+
+История больше не скачивается целиком при каждом анализе: существующий async
+MOEX client и repository layer используют последний timestamp, небольшой overlap
+и idempotent upsert. Redis и второй cache layer не добавлялись. Backtrader также
+не добавлялся: отдельный framework потребовал бы дублировать или адаптировать
+production strategy, тогда как новый backtest напрямую вызывает те же чистые
+signal/idea/risk/lifecycle-функции.
+
+Sentiment и внешние fundamentals сознательно отложены, как требовал roadmap.
+При этом в единой таблице и scoring contract уже присутствуют factor columns и
+веса, поэтому подключение providers не потребует второй модели или engine.

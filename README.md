@@ -1,36 +1,70 @@
 # MOEX Signal Bot
 
-Асинхронный Telegram-бот торговых сигналов для акций Московской биржи. Сервис
-получает данные через MOEX ISS, хранит рыночную историю и сигналы, рассчитывает
-объяснимый технический score, BUY/SELL/HOLD и безопасные TP/SL.
+Асинхронный Telegram-бот для поиска и сопровождения торговых идей по акциям
+Московской биржи. Сервис постоянно обновляет MOEX ISS-данные, строит внутренние
+технические сигналы, превращает только качественные сигналы в `TradingIdea`,
+отслеживает вход/TP/SL/срок и отдельно отправляет персональные отчёты.
 
-> Сигналы носят информационный характер и не являются индивидуальной
+> Все результаты носят информационный характер и не являются индивидуальной
 > инвестиционной рекомендацией.
 
-## Реализовано
+## Что работает
 
-- асинхронный MOEX ISS-клиент на `httpx`: retry/backoff, пагинация и ограничение
-  конкурентных запросов;
-- вселенная ликвидных акций TQBR с 1/2 эшелонами и деактивацией устаревшего
-  состава;
-- свечи M5, M15, H1, D1 и W1; M5/M15 агрегируются из M1;
-- идемпотентная инкрементальная запись свечей и снимки 20 уровней стакана;
-- единый набор индикаторов: SMA20/50/200, EMA20/50, MACD, ADX, RSI,
-  Stochastic, CCI, Bollinger Bands, ATR, OBV и относительный объём;
-- кластеризованные локальные уровни поддержки/сопротивления;
-- настраиваемый компонентный score от −100 до +100 и режим совместимости
-  `legacy`;
-- BUY/SELL/HOLD, confidence и текстовое объяснение результата;
-- TP/SL по ATR либо по уровням с проверкой направления и минимального R:R;
-- расчёт размера позиции с учётом размера лота, риска и доступного капитала;
-- Telegram-команды `/start`, `/signal`, `/watchlist`, `/settings`, `/portfolio`;
-- один APScheduler для загрузки и персонализированных alert'ов по watchlist;
-- SQLite по умолчанию и PostgreSQL через асинхронный DSN;
-- Docker-запуск от непривилегированного пользователя и ротация container logs.
+- async MOEX ISS-клиент на `httpx`: pagination, retry/backoff, concurrency limit,
+  M1→M5/M15 и опциональный ISS+ order book;
+- инкрементальная история в SQLite или PostgreSQL с overlap/upsert открытых свечей;
+- единый technical-analysis pipeline: SMA/EMA, MACD, ADX, RSI, Stochastic, CCI,
+  Bollinger Bands, ATR, OBV, relative volume и clustered support/resistance;
+- детерминированный BUY/SELL/HOLD и совместимые `legacy`/`weighted` scoring modes;
+- отдельная доменная модель `TradingIdea` с горизонтами 1 день, 5 дней и 1 месяц;
+- диапазон входа, ATR/level TP/SL, минимальный R:R и lot-aware sizing;
+- lifecycle `PENDING_ENTRY → ACTIVE → TP_HIT/SL_HIT/EXPIRED`, включая
+  `CANCELLED` и `INVALIDATED`, с полной историей событий;
+- защита от ложного результата: идея не считается активированной или выигрышной,
+  если цена не вошла в entry zone;
+- Telegram-меню «Лучшие идеи / Мои идеи / Настройки», компактная карточка и
+  отдельная кнопка «Подробнее»;
+- пользовательские фильтры: частота, горизонт, риск и минимальный confidence;
+- один APScheduler с независимыми задачами market scanning и reporting;
+- version-based deduplication уведомлений без повтора неизменившейся идеи;
+- historical backtest на том же signal/idea/risk/lifecycle pipeline;
+- forward paper trading только по реально активированным `TradingIdea`;
+- Alembic-миграции с автоматическим обновлением распознанной старой схемы.
 
-Фундаментальный анализ, новости/sentiment, облигации, полноценный backtesting и
-paper trading пока не реализованы. `/portfolio` честно сообщает об этом; сервис
-не выдаёт фиктивные позиции или P&L.
+Fundamental/news/sector scores пока не загружаются из внешних источников. Поля и
+веса для них предусмотрены, а при отсутствии данных technical score автоматически
+перенормируется без изменения текущего поведения. News/sentiment — следующий
+крупный модуль, а не фиктивный источник BUY/SELL.
+
+## Архитектура
+
+```text
+MOEX ISS → Ingestion → Candles/Order book (DB)
+                          ↓
+Analysis → Scoring → Signal → TradingIdea Generator → Risk Manager
+                                                    ↓
+                                             Idea Repository
+                                                    ↓
+                                             Idea Tracker
+                                               ↙          ↘
+                                      Paper trading    Reporting → Telegram
+
+Historical candles → тот же Signal/TradingIdea/Risk/Tracker pipeline → Backtest
+```
+
+Подробные границы модулей и инварианты описаны в
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Горизонты
+
+| Горизонт | Timeframes и веса | Primary | Срок |
+|---|---|---|---|
+| `INTRADAY_1D` | 5m 15%, 15m 35%, 1h 30%, 4h 15%, 1d 5% | 15m | 1 день |
+| `SWING_5D` | 1h 25%, 4h 35%, 1d 30%, 1w 10% | 4h | 5 дней |
+| `POSITION_1M` | 4h 10%, 1d 55%, 1w 35% | 1d | 30 дней |
+
+Это профили одного движка, а не три стратегии. Новый горизонт добавляется через
+`HorizonProfile` без дублирования analysis/scoring/risk-кода.
 
 ## Быстрый старт
 
@@ -44,22 +78,96 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Укажите токен, полученный у BotFather:
+Укажите токен BotFather в `.env`:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:replace_me
 ```
 
-Первичная загрузка без Telegram polling:
+Команды приложения:
 
 ```powershell
+python -m app migrate
 python -m app ingest
+python -m app run
+python -m app backtest SBER SWING_5D
 ```
 
-Запуск бота:
+`run`, `ingest` и `backtest` сами выполняют Alembic upgrade. Отдельный `migrate`
+удобен для deployment-проверки. Старые базы, созданные прежним `create_all`,
+распознаются и принимаются под управление Alembic; неизвестная неполная схема
+останавливает запуск с явной ошибкой вместо скрытого повреждения данных.
 
-```powershell
-python -m app run
+## Telegram
+
+После `/start` доступны три основные кнопки. Дополнительные команды:
+
+```text
+/best
+/ideas
+/portfolio
+/signal SBER 15m
+/watchlist add SBER
+/watchlist remove SBER
+/watchlist
+/settings
+/settings frequency hourly|3h|daily|strong|off
+/settings horizon 1d|5d|1m|all
+/settings risk 0.5
+/settings confidence 70
+```
+
+Пользовательская частота влияет только на доставку. Рыночный скан стартует
+асинхронно сразу после запуска и затем выполняется по будням каждые
+`INGESTION_INTERVAL_MINUTES` в торговое время. Отчётная задача проверяет
+персональные фильтры отдельно каждые 5 минут.
+
+## Scoring и риск
+
+`TECHNICAL_SCORING_MODEL=legacy` оставлен default, чтобы обновление не меняло
+существующие сигналы скрыто. Компонентный вариант включается явно:
+
+```env
+TECHNICAL_SCORING_MODEL=weighted
+SCORE_WEIGHT_TREND=25
+SCORE_WEIGHT_MOMENTUM=25
+SCORE_WEIGHT_MACD=20
+SCORE_WEIGHT_BOLLINGER=15
+SCORE_WEIGHT_VOLUME=15
+SIGNAL_THRESHOLD=25
+```
+
+TP/SL может быть ATR-based или level-based. При небезопасных уровнях движок
+использует ATR fallback; идея ниже `MINIMUM_REWARD_RISK_RATIO` не публикуется.
+
+```env
+RISK_METHOD=levels
+LEVEL_BUFFER_PCT=0.3
+MINIMUM_REWARD_RISK_RATIO=2.0
+DEFAULT_RISK_PER_TRADE_PCT=1.0
+```
+
+## Backtest и paper trading
+
+Backtest читает уже сохранённые свечи и не скачивает всю историю повторно. Он
+моделирует entry zone, активацию, TP/SL, expiry, commission, lot size и position
+sizing. CLI сейчас печатает основные метрики JSON; объект результата также
+содержит сделки и разбивки по ticker/horizon/timeframe/direction/sector/confidence.
+
+`/portfolio` показывает общий forward paper account. Позиция создаётся только
+после реальной активации опубликованной идеи и закрывается по тому же lifecycle,
+сохраняя gross/net P&L, commission и R-multiple.
+
+## MOEX ISS и order book
+
+Публичный `iss.moex.com` предоставляет свечи без токена. L2 может требовать ISS+
+и возвращать `denied`, поэтому стакан выключен по умолчанию и его сбой не мешает
+OHLCV ingestion.
+
+```env
+MOEX_BASE_URL=https://apim.moex.com/iss
+MOEX_API_TOKEN=your_iss_plus_token
+ENABLE_ORDERBOOK=true
 ```
 
 ## Docker
@@ -71,93 +179,26 @@ docker compose up --build -d
 docker compose logs -f moex-bot
 ```
 
-Первичная загрузка в отдельном контейнере:
-
-```powershell
-docker compose run --rm moex-bot python -m app ingest
-```
-
-SQLite хранится в именованном volume `moex_bot_data`. Для PostgreSQL задайте
-асинхронный DSN:
+Контейнер работает не от root, схема обновляется при запуске, SQLite хранится в
+именованном volume. Для PostgreSQL задайте async DSN:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://moex:secret@postgres:5432/moex
 ```
 
-Таблицы пока создаются через SQLAlchemy metadata. Перед изменением production-
-схемы необходимо добавить Alembic: автоматическое `create_all` не заменяет
-версионированные миграции.
-
-## Scoring и риск
-
-По умолчанию применяется `TECHNICAL_SCORING_MODEL=legacy`, чтобы обновление не
-меняло ранее настроенные сигналы. Для новой компонентной модели явно задайте
-`TECHNICAL_SCORING_MODEL=weighted`. Пять компонентов нормализуются до 100,
-поэтому веса можно менять без ручного сохранения суммы:
-
-```env
-SCORE_WEIGHT_TREND=25
-SCORE_WEIGHT_MOMENTUM=25
-SCORE_WEIGHT_MACD=20
-SCORE_WEIGHT_BOLLINGER=15
-SCORE_WEIGHT_VOLUME=15
-SIGNAL_THRESHOLD=25
-```
-
-`TECHNICAL_SCORING_MODEL=legacy` сохраняет прежнюю формулу и выбор уровней.
-TP/SL настраивается через `RISK_METHOD=atr|levels`. При `levels` небезопасный или
-недостаточный набор уровней автоматически откатывается к ATR; скрытой смены
-направления сделки не происходит.
-
-```env
-RISK_METHOD=levels
-LEVEL_BUFFER_PCT=0.3
-MINIMUM_REWARD_RISK_RATIO=2.0
-ATR_STOP_MULTIPLIER=1.5
-ATR_TAKE_MULTIPLIER=3.0
-```
-
-## Планировщик и Telegram
-
-Планировщик работает по будням с 10:00 до 18:59 в
-`SCHEDULER_TIMEZONE` (по умолчанию `Europe/Moscow`). Частота задаётся
-`INGESTION_INTERVAL_MINUTES`. Повторный BUY/SELL на той же свече не отправляется,
-а процент риска берётся из настроек конкретного получателя.
-
-```text
-/signal SBER
-/signal LKOH 1d
-/watchlist add SBER
-/watchlist remove SBER
-/watchlist
-/settings
-/settings timeframe 1h
-/settings risk 0.5
-```
-
-## MOEX ISS и стакан
-
-Публичный `iss.moex.com` предоставляет свечи без токена. L2 endpoint может
-требовать ISS+ и отвечать маркером `denied`, поэтому стакан по умолчанию выключен,
-а его недоступность не мешает OHLCV ingestion.
-
-```env
-MOEX_BASE_URL=https://apim.moex.com/iss
-MOEX_API_TOKEN=your_iss_plus_token
-ENABLE_ORDERBOOK=true
-```
-
 ## Проверки
 
 ```powershell
-pytest -q
-ruff check app tests
-python -m compileall -q app
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\ruff.exe format --check app tests migrations
+.venv\Scripts\ruff.exe check app tests migrations
+.venv\Scripts\python.exe -m compileall -q app migrations
+.venv\Scripts\python.exe -m pip check
 ```
 
-Технический аудит альтернативной реализации и принятые решения находятся в
-[`docs/CLAUDE_INTEGRATION_AUDIT.md`](docs/CLAUDE_INTEGRATION_AUDIT.md). История
-интеграции — в [`CHANGELOG.md`](CHANGELOG.md), сведения о сторонних компонентах —
-в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Аудит Claude-кандидата и решения по переносу находятся в
+[`docs/CLAUDE_INTEGRATION_AUDIT.md`](docs/CLAUDE_INTEGRATION_AUDIT.md), история
+изменений — в [`CHANGELOG.md`](CHANGELOG.md), лицензии — в
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Официальное описание market data: [MOEX AlgoPack / real-time market data](https://moexalgo.github.io/docs/description/realtime/).
+Документация MOEX: [AlgoPack / real-time market data](https://moexalgo.github.io/docs/description/realtime/).
