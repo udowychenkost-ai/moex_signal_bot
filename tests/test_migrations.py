@@ -31,6 +31,7 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch
         "trading_ideas",
         "trading_idea_events",
         "idea_notifications",
+        "paper_trades",
     }.issubset(tables)
     assert {"report_frequency", "idea_horizon", "minimum_confidence"}.issubset(user_columns)
     assert {
@@ -43,4 +44,4 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path, monkeypatch
         "last_evaluated_at",
         "activation_price",
     }.issubset(idea_columns)
-    assert revision == ("20260819_0004",)
+    assert revision == ("20260819_0005",)

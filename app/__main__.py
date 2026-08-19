@@ -21,6 +21,7 @@ from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
 from app.logging_config import configure_logging
 from app.moex import MoexClient
+from app.paper import PaperTradingService
 from app.reporting import ReportingService
 from app.repositories import get_active_instrument, get_candles
 from app.scanner import MarketScanner
@@ -78,8 +79,16 @@ async def run_bot() -> None:
                 session_factory,
                 timezone=settings.scheduler_timezone,
             )
-            scanner = MarketScanner(session_factory, ingestion, ideas, tracker)
-            services = BotServices(settings, session_factory, ingestion, signals, reporting)
+            paper = PaperTradingService(settings, session_factory)
+            scanner = MarketScanner(session_factory, ingestion, ideas, tracker, paper)
+            services = BotServices(
+                settings,
+                session_factory,
+                ingestion,
+                signals,
+                reporting,
+                paper,
+            )
             jobs = ScheduledJobs(settings, scanner, reporting, bot)
             scheduler = build_scheduler(settings, jobs)
             scheduler.start()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.domain import PositionSize, RiskLevels
+from app.domain import PositionSize, RiskLevels, TradePnL
 
 
 def atr_risk_levels(
@@ -130,3 +130,30 @@ def position_size(
         lot_size=lot_size,
         cap_to_cash=False,
     ).units
+
+
+def calculate_trade_pnl(
+    *,
+    direction: str,
+    entry_price: float,
+    exit_price: float,
+    units: int,
+    commission_pct: float,
+    actual_risk: float,
+) -> TradePnL:
+    if direction not in {"BUY", "SELL"}:
+        raise ValueError("direction must be BUY or SELL")
+    if min(entry_price, exit_price) <= 0 or units < 0:
+        raise ValueError("prices must be positive and units non-negative")
+    if commission_pct < 0 or actual_risk < 0:
+        raise ValueError("commission and actual risk must be non-negative")
+    price_move = exit_price - entry_price if direction == "BUY" else entry_price - exit_price
+    gross_pnl = price_move * units
+    commission = (entry_price + exit_price) * units * commission_pct / 100
+    net_pnl = gross_pnl - commission
+    return TradePnL(
+        gross_pnl=gross_pnl,
+        commission=commission,
+        net_pnl=net_pnl,
+        r_multiple=net_pnl / actual_risk if actual_risk else 0.0,
+    )

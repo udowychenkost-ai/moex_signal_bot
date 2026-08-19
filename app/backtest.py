@@ -15,7 +15,7 @@ from app.domain import (
 from app.horizons import get_horizon_profile
 from app.idea_tracker import evaluate_idea_candle
 from app.ideas import build_trading_idea
-from app.risk import calculate_position_size
+from app.risk import calculate_position_size, calculate_trade_pnl
 from app.signals import build_signal
 
 
@@ -129,20 +129,21 @@ def _close_position(
     idea = record.idea
     if idea.activation_price is None or idea.close_price is None or record.units <= 0:
         return 0.0
-    price_move = (
-        idea.close_price - idea.activation_price
-        if idea.direction.value == "BUY"
-        else idea.activation_price - idea.close_price
+    pnl = calculate_trade_pnl(
+        direction=idea.direction.value,
+        entry_price=idea.activation_price,
+        exit_price=idea.close_price,
+        units=record.units,
+        commission_pct=commission_pct,
+        actual_risk=record.actual_risk,
     )
-    record.gross_pnl = price_move * record.units
-    record.commission = (
-        (idea.activation_price + idea.close_price) * record.units * commission_pct / 100
-    )
-    record.net_pnl = record.gross_pnl - record.commission
+    record.gross_pnl = pnl.gross_pnl
+    record.commission = pnl.commission
+    record.net_pnl = pnl.net_pnl
     record.return_pct = (
         record.net_pnl / record.equity_at_entry * 100 if record.equity_at_entry else 0.0
     )
-    record.r_multiple = record.net_pnl / record.actual_risk if record.actual_risk else 0.0
+    record.r_multiple = pnl.r_multiple
     return record.net_pnl
 
 

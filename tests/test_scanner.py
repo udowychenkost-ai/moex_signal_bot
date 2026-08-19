@@ -71,5 +71,7 @@ async def test_market_scanning_runs_independently_from_reporting() -> None:
         "ideas_updated": 1,
         "ideas_skipped": 1,
         "idea_errors": 0,
+        "paper_open": 0,
+        "paper_closed": 0,
     }
     await engine.dispose()

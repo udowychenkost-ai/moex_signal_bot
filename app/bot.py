@@ -18,6 +18,7 @@ from app.config import Settings
 from app.domain import InsufficientDataError, MoexApiError, UnknownTickerError
 from app.ingestion import IngestionService
 from app.models import TelegramUser
+from app.paper import PaperTradingService, format_paper_summary
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
 from app.repositories import (
     add_watchlist_item,
@@ -39,6 +40,7 @@ class BotServices:
     ingestion: IngestionService
     signals: SignalService
     reporting: ReportingService | None = None
+    paper: PaperTradingService | None = None
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -294,9 +296,9 @@ def create_router(services: BotServices) -> Router:
 
     @router.message(Command("portfolio"))
     async def portfolio(message: Message) -> None:
-        await message.answer(
-            "Paper trading будет добавлен на этапе трекинга позиций. "
-            "MVP уже сохраняет все сигналы для последующего бэктеста."
-        )
+        if services.paper is None:
+            await message.answer("Paper trading сейчас недоступен.")
+            return
+        await message.answer(format_paper_summary(await services.paper.summary()))
 
     return router

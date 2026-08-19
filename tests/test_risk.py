@@ -3,6 +3,7 @@ import pytest
 from app.risk import (
     atr_risk_levels,
     calculate_position_size,
+    calculate_trade_pnl,
     level_risk_levels,
     position_size,
 )
@@ -90,3 +91,30 @@ def test_detailed_position_size_caps_to_cash_and_lot() -> None:
     assert result.position_value == pytest.approx(9_000)
     assert result.actual_risk == pytest.approx(9)
     assert result.capped_by_cash is True
+
+
+@pytest.mark.parametrize(
+    ("direction", "entry", "exit_price", "expected_gross"),
+    [
+        ("BUY", 100, 110, 1000),
+        ("SELL", 100, 90, 1000),
+    ],
+)
+def test_trade_pnl_is_shared_by_buy_and_sell_simulations(
+    direction: str,
+    entry: float,
+    exit_price: float,
+    expected_gross: float,
+) -> None:
+    result = calculate_trade_pnl(
+        direction=direction,
+        entry_price=entry,
+        exit_price=exit_price,
+        units=100,
+        commission_pct=0.05,
+        actual_risk=500,
+    )
+    assert result.gross_pnl == expected_gross
+    assert result.commission == pytest.approx((entry + exit_price) * 100 * 0.0005)
+    assert result.net_pnl == pytest.approx(result.gross_pnl - result.commission)
+    assert result.r_multiple == pytest.approx(result.net_pnl / 500)

@@ -212,3 +212,30 @@ class IdeaNotification(Base):
     )
     idea_version: Mapped[int] = mapped_column(Integer)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+    __table_args__ = (UniqueConstraint("idea_id", name="uq_paper_trade_idea"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    idea_id: Mapped[int] = mapped_column(
+        ForeignKey("trading_ideas.id", ondelete="CASCADE"), index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(36), index=True)
+    direction: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    units: Mapped[int] = mapped_column(Integer)
+    lots: Mapped[int] = mapped_column(Integer)
+    risk_budget: Mapped[float] = mapped_column(Float)
+    actual_risk: Mapped[float] = mapped_column(Float)
+    position_value: Mapped[float] = mapped_column(Float)
+    gross_pnl: Mapped[float] = mapped_column(Float, default=0)
+    commission: Mapped[float] = mapped_column(Float, default=0)
+    net_pnl: Mapped[float] = mapped_column(Float, default=0)
+    r_multiple: Mapped[float] = mapped_column(Float, default=0)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

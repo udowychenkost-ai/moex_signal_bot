@@ -168,6 +168,14 @@ class PositionSize:
     capped_by_cash: bool
 
 
+@dataclass(frozen=True, slots=True)
+class TradePnL:
+    gross_pnl: float
+    commission: float
+    net_pnl: float
+    r_multiple: float
+
+
 @dataclass(slots=True)
 class GeneratedSignal:
     secid: str
