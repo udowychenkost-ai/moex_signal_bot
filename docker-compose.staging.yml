@@ -20,8 +20,7 @@ services:
     restart: unless-stopped
     env_file: .env.staging
     environment:
-      DATABASE_URL: >-
-        postgresql+asyncpg://${POSTGRES_USER:-moex}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-moex}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env.staging}
     depends_on:
       postgres:
         condition: service_healthy

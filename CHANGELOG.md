@@ -22,12 +22,27 @@
   `build_trading_idea`, risk and lifecycle functions, including entry range,
   expiry, commission, lot sizing, drawdown, Sharpe, expectancy and breakdowns.
 - Forward paper trading tied one-to-one to activated persisted ideas, with P&L,
-  commission, R-multiple and `/portfolio` summary.
-- Alembic revisions `20260819_0001`–`20260819_0006` and automatic adoption of
+  reference/fill prices, commission, slippage, R-multiple and `/portfolio`
+  summary.
+- Alembic revisions `20260819_0001`–`20260819_0007` and automatic adoption of
   recognized legacy `create_all` databases.
 - Extensible idea factor columns (`technical`, `fundamental`, `news`, `total`)
   with weight renormalization when optional providers are absent.
 - Architecture documentation and expanded unit/integration/migration tests.
+- A separate fixed 20-stock research universe with incremental MOEX history,
+  coverage manifest and explicit survivorship/corporate-action warnings.
+- Leakage-safe TRAIN/VALIDATION/OOS evaluation, limited calibration sweep,
+  three-fold walk-forward, simple buy-and-hold/EMA/RSI benchmarks and strict
+  JSON/Markdown research output.
+- Configurable order-side BUY/SELL slippage with gross, commission, slippage and
+  net attribution in backtest and forward paper trading.
+- PostgreSQL staging compose example and an explicit forward-paper acceptance
+  checklist; no real-order execution path was added.
+- Reproducible 20-stock/1,722,488-candle research artifacts through 2026-08-18.
+  OOS rejected intraday (PF 0.51, expectancy -0.46 R), found swing economically
+  flat after costs (PF 1.004), and retained only a modest position-horizon edge
+  for forward paper (PF 1.145, expectancy +0.067 R). Production defaults were
+  not changed automatically.
 
 ### Changed
 
@@ -38,6 +53,9 @@
 - Application entry points run Alembic upgrades instead of relying on runtime
   `metadata.create_all`.
 - Risk and P&L calculations are shared by live ideas, backtest and paper trading.
+- Backtest decisions execute no earlier than the next primary candle; adjacent
+  evaluation windows are non-overlapping and expiry-crossing candles cannot
+  claim post-deadline TP/SL.
 - `_claude_candidate` and all duplicate client/bot/scheduler/model/config code
   were removed after the audit.
 

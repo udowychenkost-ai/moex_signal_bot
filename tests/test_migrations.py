@@ -90,3 +90,19 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert revision == ("20260819_0007",)
+
+
+async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
+    database_path = tmp_path / "previous-head.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    await asyncio.to_thread(command.upgrade, migration_config(database_url), "20260819_0006")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("DROP TABLE alembic_version")
+
+    await migrate_database(database_url)
+
+    with sqlite3.connect(database_path) as connection:
+        paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
+    assert revision == ("20260819_0007",)

@@ -28,13 +28,14 @@
 - один APScheduler с независимыми задачами market scanning и reporting;
 - version-based deduplication уведомлений без повтора неизменившейся идеи;
 - historical backtest на том же signal/idea/risk/lifecycle pipeline;
+- leakage-safe research pipeline с TRAIN/VALIDATION/OOS, walk-forward,
+  legacy/weighted comparison и простыми benchmark-стратегиями;
 - forward paper trading только по реально активированным `TradingIdea`;
 - Alembic-миграции с автоматическим обновлением распознанной старой схемы.
 
-Fundamental/news/sector scores пока не загружаются из внешних источников. Поля и
-веса для них предусмотрены, а при отсутствии данных technical score автоматически
-перенормируется без изменения текущего поведения. News/sentiment — следующий
-крупный модуль, а не фиктивный источник BUY/SELL.
+Fundamental/news/sector scores не загружаются из внешних источников и не входят в
+текущую validation-фазу. Поля и веса для них предусмотрены, а при отсутствии
+данных technical score автоматически перенормируется без изменения поведения.
 
 ## Архитектура
 
@@ -91,6 +92,8 @@ python -m app migrate
 python -m app ingest
 python -m app run
 python -m app backtest SBER SWING_5D
+python -m app.research ingest --date-to 2026-08-18
+python -m app.research run
 ```
 
 `run`, `ingest` и `backtest` сами выполняют Alembic upgrade. Отдельный `migrate`
@@ -150,13 +153,41 @@ DEFAULT_RISK_PER_TRADE_PCT=1.0
 ## Backtest и paper trading
 
 Backtest читает уже сохранённые свечи и не скачивает всю историю повторно. Он
-моделирует entry zone, активацию, TP/SL, expiry, commission, lot size и position
-sizing. CLI сейчас печатает основные метрики JSON; объект результата также
-содержит сделки и разбивки по ticker/horizon/timeframe/direction/sector/confidence.
+моделирует entry zone, активацию не раньше следующей свечи, TP/SL, expiry,
+commission, раздельный BUY/SELL slippage, lot size и position sizing. Окна
+`[start, end)` не пересекаются, а signal/ATR/S/R получают только уже закрытые к
+моменту решения свечи. Результат содержит gross/commission/slippage/net,
+expectancy, R, drawdown, Sharpe и разбивки по ticker/horizon/timeframe/direction/
+confidence/year.
+
+Отдельный research dataset задаётся в `research.toml` и хранится в gitignored
+`data/research.db`. Команда `app.research run` использует заранее объявленную
+ограниченную сетку: TRAIN формирует shortlist, VALIDATION выбирает конфигурацию,
+OOS TEST не участвует в выборе. Результаты сохраняются в
+[`reports/backtests`](reports/backtests), включая `BACKTEST_REPORT.md`, fixed
+legacy/weighted baselines, calibration summary, OOS и walk-forward.
+
+Зафиксированный прогон до `2026-08-18` использовал 20 акций и 1 722 488 свечей.
+Результат после commission/slippage:
+
+| Горизонт | Selected config | OOS PF | Expectancy | Net P&L | Вывод |
+|---|---|---:|---:|---:|---|
+| 1 день | `weighted_trend_context` | 0.51 | -0.46 R | -55 329.76 ₽ | reject |
+| 5 дней | `weighted_trend_context` | 1.004 | ≈0 R | +586.24 ₽ | экономически нулевой |
+| 1 месяц | `legacy_default` | 1.145 | +0.067 R | +20 969.06 ₽ | только forward paper |
+
+Полные splits, fixed-model comparisons, ticker/direction/confidence breakdowns и
+walk-forward находятся в
+[`BACKTEST_REPORT.md`](reports/backtests/BACKTEST_REPORT.md). Production default
+автоматически не переключается по результату исследования. `Maximum drawdown`
+в текущем отчёте рассчитан по realised equity после закрытий, не по intratrade
+mark-to-market.
 
 `/portfolio` показывает общий forward paper account. Позиция создаётся только
 после реальной активации опубликованной идеи и закрывается по тому же lifecycle,
-сохраняя gross/net P&L, commission и R-multiple.
+сохраняя reference/fill prices, gross P&L, commission, slippage, net P&L и
+R-multiple. В проекте нет broker execution adapter: paper-контур не может
+разместить реальную заявку.
 
 ## MOEX ISS и order book
 
@@ -185,6 +216,12 @@ docker compose logs -f moex-bot
 ```env
 DATABASE_URL=postgresql+asyncpg://moex:secret@postgres:5432/moex
 ```
+
+Для forward-paper staging с PostgreSQL используйте `.env.staging.example` и
+`docker-compose.staging.yml`. Пошаговая приёмка описана в
+[`docs/STAGING_CHECKLIST.md`](docs/STAGING_CHECKLIST.md). Если Docker CLI или
+PostgreSQL на рабочей машине отсутствуют, runtime-проверка остаётся внешним
+deployment check и не считается выполненной локально.
 
 ## Проверки
 

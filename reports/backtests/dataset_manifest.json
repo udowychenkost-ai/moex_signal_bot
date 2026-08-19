@@ -1,0 +1,1057 @@
+{
+  "dataset": "moex-liquid-20-2026q3",
+  "generated_at": "2026-08-19T16:59:52.957673+00:00",
+  "requested_tickers": [
+    "SBER",
+    "GAZP",
+    "LKOH",
+    "YDEX",
+    "GMKN",
+    "ROSN",
+    "NVTK",
+    "TATN",
+    "MTSS",
+    "MOEX",
+    "PLZL",
+    "MGNT",
+    "CHMF",
+    "NLMK",
+    "ALRS",
+    "VTBR",
+    "SIBN",
+    "PHOR",
+    "IRAO",
+    "SNGS"
+  ],
+  "available_tickers": [
+    "SBER",
+    "GAZP",
+    "LKOH",
+    "YDEX",
+    "GMKN",
+    "ROSN",
+    "NVTK",
+    "TATN",
+    "MTSS",
+    "MOEX",
+    "PLZL",
+    "MGNT",
+    "CHMF",
+    "NLMK",
+    "ALRS",
+    "VTBR",
+    "SIBN",
+    "PHOR",
+    "IRAO",
+    "SNGS"
+  ],
+  "missing_tickers": [],
+  "selection_method": "fixed_current_liquid_universe",
+  "survivorship_bias_warning": true,
+  "prices_adjusted_for_corporate_actions": false,
+  "inserted": {
+    "SBER": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 26221,
+      "4h": 7202,
+      "1d": 6,
+      "1w": 4
+    },
+    "GAZP": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 26224,
+      "4h": 7203,
+      "1d": 3180,
+      "1w": 633
+    },
+    "LKOH": {
+      "5m": 37438,
+      "15m": 12777,
+      "1h": 26218,
+      "4h": 7202,
+      "1d": 3286,
+      "1w": 655
+    },
+    "YDEX": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 10189,
+      "4h": 2835,
+      "1d": 638,
+      "1w": 108
+    },
+    "GMKN": {
+      "5m": 37471,
+      "15m": 12789,
+      "1h": 26159,
+      "4h": 7187,
+      "1d": 3176,
+      "1w": 633
+    },
+    "ROSN": {
+      "5m": 37438,
+      "15m": 12777,
+      "1h": 26217,
+      "4h": 7201,
+      "1d": 3180,
+      "1w": 633
+    },
+    "NVTK": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 26177,
+      "4h": 7190,
+      "1d": 3282,
+      "1w": 655
+    },
+    "TATN": {
+      "5m": 37437,
+      "15m": 12776,
+      "1h": 26192,
+      "4h": 7195,
+      "1d": 3284,
+      "1w": 655
+    },
+    "MTSS": {
+      "5m": 37467,
+      "15m": 12788,
+      "1h": 26191,
+      "4h": 7198,
+      "1d": 3276,
+      "1w": 654
+    },
+    "MOEX": {
+      "5m": 37465,
+      "15m": 12788,
+      "1h": 26213,
+      "4h": 7201,
+      "1d": 3286,
+      "1w": 655
+    },
+    "PLZL": {
+      "5m": 37471,
+      "15m": 12789,
+      "1h": 26104,
+      "4h": 7174,
+      "1d": 3173,
+      "1w": 633
+    },
+    "MGNT": {
+      "5m": 37361,
+      "15m": 12781,
+      "1h": 26203,
+      "4h": 7203,
+      "1d": 3286,
+      "1w": 655
+    },
+    "CHMF": {
+      "5m": 37466,
+      "15m": 12787,
+      "1h": 26220,
+      "4h": 7203,
+      "1d": 3180,
+      "1w": 633
+    },
+    "NLMK": {
+      "5m": 37452,
+      "15m": 12786,
+      "1h": 26213,
+      "4h": 7203,
+      "1d": 3180,
+      "1w": 633
+    },
+    "ALRS": {
+      "5m": 37471,
+      "15m": 12788,
+      "1h": 26220,
+      "4h": 7203,
+      "1d": 3286,
+      "1w": 655
+    },
+    "VTBR": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 26156,
+      "4h": 7185,
+      "1d": 3282,
+      "1w": 655
+    },
+    "SIBN": {
+      "5m": 37425,
+      "15m": 12782,
+      "1h": 23162,
+      "4h": 6555,
+      "1d": 3172,
+      "1w": 632
+    },
+    "PHOR": {
+      "5m": 37293,
+      "15m": 12774,
+      "1h": 25972,
+      "4h": 7168,
+      "1d": 3284,
+      "1w": 655
+    },
+    "IRAO": {
+      "5m": 37474,
+      "15m": 12789,
+      "1h": 26196,
+      "4h": 7197,
+      "1d": 3266,
+      "1w": 651
+    },
+    "SNGS": {
+      "5m": 37241,
+      "15m": 12770,
+      "1h": 26174,
+      "4h": 7202,
+      "1d": 3180,
+      "1w": 633
+    }
+  },
+  "errors": {},
+  "coverage": [
+    {
+      "ticker": "ALRS",
+      "timeframe": "15m",
+      "count": 12788,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "ALRS",
+      "timeframe": "1d",
+      "count": 3286,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ALRS",
+      "timeframe": "1h",
+      "count": 26220,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ALRS",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "ALRS",
+      "timeframe": "4h",
+      "count": 7203,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ALRS",
+      "timeframe": "5m",
+      "count": 37471,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "15m",
+      "count": 12787,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "1d",
+      "count": 3180,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "1h",
+      "count": 26220,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "4h",
+      "count": 7203,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "CHMF",
+      "timeframe": "5m",
+      "count": 37466,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "1d",
+      "count": 3180,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "1h",
+      "count": 26224,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "4h",
+      "count": 7203,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GAZP",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "1d",
+      "count": 3176,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "1h",
+      "count": 26159,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "4h",
+      "count": 7187,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "GMKN",
+      "timeframe": "5m",
+      "count": 37471,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "1d",
+      "count": 3266,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "1h",
+      "count": 26196,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "1w",
+      "count": 651,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "4h",
+      "count": 7197,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "IRAO",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "15m",
+      "count": 12777,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "1d",
+      "count": 3286,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "1h",
+      "count": 26218,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "4h",
+      "count": 7202,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "LKOH",
+      "timeframe": "5m",
+      "count": 37438,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "15m",
+      "count": 12781,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "1d",
+      "count": 3286,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "1h",
+      "count": 26203,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "4h",
+      "count": 7203,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MGNT",
+      "timeframe": "5m",
+      "count": 37361,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "15m",
+      "count": 12788,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "1d",
+      "count": 3286,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "1h",
+      "count": 26213,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "4h",
+      "count": 7201,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MOEX",
+      "timeframe": "5m",
+      "count": 37465,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "15m",
+      "count": 12788,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "1d",
+      "count": 3276,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "1h",
+      "count": 26191,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "1w",
+      "count": 654,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "4h",
+      "count": 7198,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "MTSS",
+      "timeframe": "5m",
+      "count": 37467,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "15m",
+      "count": 12786,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "1d",
+      "count": 3180,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "1h",
+      "count": 26213,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "4h",
+      "count": 7203,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NLMK",
+      "timeframe": "5m",
+      "count": 37452,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "1d",
+      "count": 3282,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "1h",
+      "count": 26177,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "4h",
+      "count": 7190,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "NVTK",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "15m",
+      "count": 12774,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "1d",
+      "count": 3284,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "1h",
+      "count": 25972,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "4h",
+      "count": 7168,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PHOR",
+      "timeframe": "5m",
+      "count": 37293,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "1d",
+      "count": 3173,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "1h",
+      "count": 26104,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "4h",
+      "count": 7174,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "PLZL",
+      "timeframe": "5m",
+      "count": 37471,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "15m",
+      "count": 12777,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "1d",
+      "count": 3180,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "1h",
+      "count": 26217,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "4h",
+      "count": 7201,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "ROSN",
+      "timeframe": "5m",
+      "count": 37438,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "1d",
+      "count": 3286,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "1h",
+      "count": 26221,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "4h",
+      "count": 7202,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SBER",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "15m",
+      "count": 12782,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "1d",
+      "count": 3172,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "1h",
+      "count": 23162,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "1w",
+      "count": 632,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "4h",
+      "count": 6555,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SIBN",
+      "timeframe": "5m",
+      "count": 37425,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "15m",
+      "count": 12770,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "1d",
+      "count": 3180,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "1h",
+      "count": 26174,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "1w",
+      "count": 633,
+      "first": "2014-06-08T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "4h",
+      "count": 7202,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "SNGS",
+      "timeframe": "5m",
+      "count": 37241,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "15m",
+      "count": 12776,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "1d",
+      "count": 3284,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "1h",
+      "count": 26192,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "4h",
+      "count": 7195,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "TATN",
+      "timeframe": "5m",
+      "count": 37437,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "1d",
+      "count": 3282,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "1h",
+      "count": 26156,
+      "first": "2020-01-03T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "1w",
+      "count": 655,
+      "first": "2014-01-05T20:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "4h",
+      "count": 7185,
+      "first": "2020-01-03T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "VTBR",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "15m",
+      "count": 12789,
+      "first": "2026-01-05T03:45:00",
+      "last": "2026-08-18T20:49:59"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "1d",
+      "count": 638,
+      "first": "2024-07-23T21:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "1h",
+      "count": 10189,
+      "first": "2024-07-24T06:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "1w",
+      "count": 108,
+      "first": "2024-07-21T21:00:00",
+      "last": "2026-08-15T21:00:00"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "4h",
+      "count": 2835,
+      "first": "2024-07-24T05:00:00",
+      "last": "2026-08-18T20:59:59"
+    },
+    {
+      "ticker": "YDEX",
+      "timeframe": "5m",
+      "count": 37474,
+      "first": "2026-01-05T03:55:00",
+      "last": "2026-08-18T20:49:59"
+    }
+  ]
+}

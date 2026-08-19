@@ -42,8 +42,7 @@ Backtest получает historical candles из того же repository layer
 |---|---|---|
 | `app/moex.py` | HTTP-контракт MOEX ISS, pagination, retry, преобразование ответа | БД, scoring |
 | `app/ingestion.py` | Universe, incremental range, OHLCV/order-book persistence | Генерацию идей |
-| `app/analysis.py` | Индикаторы и уровни из переданных candles | BUY/SELL и persistence |
-| `app/scoring.py` | Детерминированный technical score | TP/SL, Telegram |
+| `app/analysis.py` | Индикаторы, уровни и детерминированный technical score | TP/SL, Telegram |
 | `app/signals.py` | Один внутренний `GeneratedSignal`, журнал сигналов | Пользовательскую торговую идею |
 | `app/horizons.py` | Профили сроков и веса | Отдельную стратегию на горизонт |
 | `app/ideas.py` | Агрегация timeframes/factors, entry zone, вызов общего risk manager | Lifecycle после публикации |
@@ -52,6 +51,9 @@ Backtest получает historical candles из того же repository layer
 | `app/reporting.py` | Фильтры пользователя, формат, расписание доставки, notification dedup | Market scan |
 | `app/paper.py` | Forward P&L по активированным persisted ideas | Альтернативную торговую стратегию |
 | `app/backtest.py` | Историческая оркестрация общего production pipeline и метрики | Отдельные правила сигналов |
+| `app/research_data.py` | Отдельный universe, incremental dataset и coverage metadata | Production universe |
+| `app/research_runner.py` | TRAIN/VALIDATION/OOS, calibration и walk-forward orchestration | Изменение production defaults |
+| `app/research_baselines.py` | Research-only buy-and-hold/EMA/RSI benchmarks | Production signals |
 | `app/scanner.py` | Один рыночный цикл: ingestion → tracking → ideas → paper | Telegram frequency |
 | `app/scheduler.py` | Две задачи в одном scheduler | Бизнес-логику задач |
 | `app/migrations.py` | Alembic upgrade и безопасное принятие распознанной legacy-схемы | Runtime `create_all` |
@@ -138,3 +140,5 @@ SQLAlchemy-модель едина для SQLite/PostgreSQL. Alembic — еди�
 - несколько реплик scheduler требуют внешней leader-election/lock стратегии;
 - параметры стратегии нужно калибровать out-of-sample до любого реального риска;
 - бот не размещает реальные биржевые заявки.
+- research universe фиксирован по текущей ликвидности и не устраняет
+  survivorship bias; свечи не скорректированы на corporate actions.
