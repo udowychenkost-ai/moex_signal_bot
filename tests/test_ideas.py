@@ -205,7 +205,12 @@ async def test_repository_deduplicates_and_versions_material_updates() -> None:
     assert not duplicate.created
     assert not duplicate.materially_changed
 
-    changed_data = replace(data, confidence=data.confidence + 10)
+    changed_data = replace(
+        data,
+        confidence=data.confidence + 10,
+        technical_score=data.technical_score + 5,
+        total_score=data.total_score + 5,
+    )
     async with factory() as session, session.begin():
         updated = await create_or_update_idea(
             session,
@@ -215,6 +220,8 @@ async def test_repository_deduplicates_and_versions_material_updates() -> None:
         )
     assert updated.materially_changed
     assert updated.idea.version == 2
+    assert updated.idea.technical_score == pytest.approx(data.technical_score + 5)
+    assert updated.idea.total_score == pytest.approx(data.total_score + 5)
     async with factory() as session:
         idea_count = await session.scalar(select(func.count()).select_from(TradingIdea))
         event_count = await session.scalar(select(func.count()).select_from(TradingIdeaEvent))

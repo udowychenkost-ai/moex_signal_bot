@@ -200,6 +200,7 @@ async def create_or_update_idea(
     )
     existing.current_price = data.current_price
     existing.source_signal_id = data.source_signal_id
+    existing.source_timeframes = ",".join(data.source_timeframes)
     existing.source_candle_begin = data.source_candle_begin
     existing.updated_at = data.created_at
     if not material:
@@ -207,6 +208,10 @@ async def create_or_update_idea(
 
     previous_status = existing.status
     existing.confidence = data.confidence
+    existing.technical_score = data.technical_score
+    existing.fundamental_score = data.fundamental_score
+    existing.news_score = data.news_score
+    existing.total_score = data.total_score
     existing.rationale = "\n".join(data.rationale)
     existing.material_hash = material_hash
     existing.version += 1
@@ -218,6 +223,7 @@ async def create_or_update_idea(
         existing.expected_return_pct = data.expected_return_pct
         existing.risk_pct = data.risk_pct
         existing.risk_reward_ratio = data.risk_reward_ratio
+        existing.invalidation_reason = data.invalidation_reason
         existing.expires_at = data.expires_at
     add_idea_event(
         session,
