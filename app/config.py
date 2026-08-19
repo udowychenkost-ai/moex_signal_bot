@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     backtest_commission_pct: float = Field(default=0.05, ge=0, le=5)
     backtest_buy_slippage_bps: float = Field(default=5.0, ge=0, le=500)
     backtest_sell_slippage_bps: float = Field(default=5.0, ge=0, le=500)
+    research_database_url: str = "sqlite+aiosqlite:///./data/research.db"
+    research_config_path: str = "research.toml"
+    research_output_dir: str = "reports/backtests"
 
     @field_validator("default_timeframe")
     @classmethod

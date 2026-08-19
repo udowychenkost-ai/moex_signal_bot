@@ -121,25 +121,32 @@ async def upsert_candles(session: AsyncSession, candles: list[CandleData]) -> in
         }
         for item in candles
     ]
-    statement = _upsert_statement(session, Candle, values)
-    excluded = statement.excluded
-    update_values = {
-        "end": excluded.end,
-        "open": excluded.open,
-        "high": excluded.high,
-        "low": excluded.low,
-        "close": excluded.close,
-        "volume": excluded.volume,
-        "value": excluded.value,
-    }
-    if session.bind.dialect.name == "postgresql":
-        statement = statement.on_conflict_do_update(constraint="uq_candle_key", set_=update_values)
-    else:
-        statement = statement.on_conflict_do_update(
-            index_elements=["secid", "board_id", "timeframe", "begin"],
-            set_=update_values,
-        )
-    await session.execute(statement)
+    dialect = session.bind.dialect.name if session.bind else ""
+    # Each candle has 11 bound values. Batching 80 rows remains below the
+    # historical SQLite 999-variable limit; PostgreSQL safely accepts more.
+    batch_size = 80 if dialect == "sqlite" else 1_000
+    for offset in range(0, len(values), batch_size):
+        statement = _upsert_statement(session, Candle, values[offset : offset + batch_size])
+        excluded = statement.excluded
+        update_values = {
+            "end": excluded.end,
+            "open": excluded.open,
+            "high": excluded.high,
+            "low": excluded.low,
+            "close": excluded.close,
+            "volume": excluded.volume,
+            "value": excluded.value,
+        }
+        if dialect == "postgresql":
+            statement = statement.on_conflict_do_update(
+                constraint="uq_candle_key", set_=update_values
+            )
+        else:
+            statement = statement.on_conflict_do_update(
+                index_elements=["secid", "board_id", "timeframe", "begin"],
+                set_=update_values,
+            )
+        await session.execute(statement)
     return len(values)
 
 
@@ -157,6 +164,50 @@ async def get_candles(
         .limit(limit)
     )
     return list(reversed(list(result)))
+
+
+async def get_candles_range(
+    session: AsyncSession,
+    secid: str,
+    timeframe: str,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> list[Candle]:
+    statement = select(Candle).where(
+        Candle.secid == secid.upper(),
+        Candle.timeframe == timeframe,
+    )
+    if date_from is not None:
+        statement = statement.where(Candle.end >= date_from)
+    if date_to is not None:
+        statement = statement.where(Candle.end <= date_to)
+    result = await session.scalars(statement.order_by(Candle.begin.asc()))
+    return list(result)
+
+
+async def candle_coverage(session: AsyncSession) -> list[dict[str, object]]:
+    rows = await session.execute(
+        select(
+            Candle.secid,
+            Candle.timeframe,
+            func.count(Candle.id),
+            func.min(Candle.begin),
+            func.max(Candle.end),
+        )
+        .group_by(Candle.secid, Candle.timeframe)
+        .order_by(Candle.secid, Candle.timeframe)
+    )
+    return [
+        {
+            "ticker": str(row[0]),
+            "timeframe": str(row[1]),
+            "count": int(row[2]),
+            "first": row[3],
+            "last": row[4],
+        }
+        for row in rows
+    ]
 
 
 async def get_candles_after(

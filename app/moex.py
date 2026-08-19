@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -182,9 +183,63 @@ class MoexClient:
         date_from: datetime,
         *,
         board_id: str = "TQBR",
+        date_to: datetime | None = None,
     ) -> list[CandleData]:
-        if timeframe not in SOURCE_INTERVALS:
-            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        result = await self.fetch_candles_multi(
+            secid,
+            [timeframe],
+            date_from,
+            board_id=board_id,
+            date_to=date_to,
+        )
+        return result[timeframe]
+
+    async def fetch_candles_multi(
+        self,
+        secid: str,
+        timeframes: list[str],
+        date_from: datetime,
+        *,
+        board_id: str = "TQBR",
+        date_to: datetime | None = None,
+    ) -> dict[str, list[CandleData]]:
+        """Fetch each native MOEX interval once and derive requested timeframes."""
+        invalid = set(timeframes) - set(SOURCE_INTERVALS)
+        if invalid:
+            raise ValueError(f"Unsupported timeframes: {', '.join(sorted(invalid))}")
+        grouped: dict[int, list[str]] = defaultdict(list)
+        for timeframe in dict.fromkeys(timeframes):
+            grouped[SOURCE_INTERVALS[timeframe]].append(timeframe)
+        result: dict[str, list[CandleData]] = {}
+        for source_interval, grouped_timeframes in grouped.items():
+            raw_rows = await self._fetch_candle_rows(
+                secid,
+                source_interval,
+                date_from,
+                board_id=board_id,
+                date_to=date_to,
+            )
+            for timeframe in grouped_timeframes:
+                rows = raw_rows
+                if timeframe in RESAMPLE_RULES:
+                    rows = self._resample(raw_rows, RESAMPLE_RULES[timeframe])
+                result[timeframe] = self._candle_data(
+                    secid,
+                    board_id,
+                    timeframe,
+                    rows,
+                )
+        return result
+
+    async def _fetch_candle_rows(
+        self,
+        secid: str,
+        source_interval: int,
+        date_from: datetime,
+        *,
+        board_id: str,
+        date_to: datetime | None,
+    ) -> list[dict[str, Any]]:
         path = (
             f"/engines/stock/markets/shares/boards/{board_id}/"
             f"securities/{secid.upper()}/candles.json"
@@ -192,16 +247,22 @@ class MoexClient:
         params = {
             "iss.only": "candles,candles.cursor",
             "candles.columns": "open,close,high,low,value,volume,begin,end",
-            "interval": SOURCE_INTERVALS[timeframe],
+            "interval": source_interval,
             "from": date_from.astimezone(UTC).date().isoformat(),
-            "till": datetime.now(UTC).date().isoformat(),
+            "till": (date_to or datetime.now(UTC)).astimezone(UTC).date().isoformat(),
         }
         raw_rows: list[dict[str, Any]] = []
         async for _, rows in self._pages(path, "candles", params):
             raw_rows.extend(rows)
-        if timeframe in RESAMPLE_RULES:
-            raw_rows = self._resample(raw_rows, RESAMPLE_RULES[timeframe])
+        return raw_rows
 
+    @staticmethod
+    def _candle_data(
+        secid: str,
+        board_id: str,
+        timeframe: str,
+        raw_rows: list[dict[str, Any]],
+    ) -> list[CandleData]:
         result: list[CandleData] = []
         for row in raw_rows:
             required = ("open", "high", "low", "close", "begin", "end")

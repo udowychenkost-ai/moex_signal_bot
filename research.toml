@@ -1,0 +1,45 @@
+[dataset]
+name = "moex-liquid-20-2026q3"
+board_id = "TQBR"
+tickers = [
+  "SBER",
+  "GAZP",
+  "LKOH",
+  "YDEX",
+  "GMKN",
+  "ROSN",
+  "NVTK",
+  "TATN",
+  "MTSS",
+  "MOEX",
+  "PLZL",
+  "MGNT",
+  "CHMF",
+  "NLMK",
+  "ALRS",
+  "VTBR",
+  "SIBN",
+  "PHOR",
+  "IRAO",
+  "SNGS",
+]
+
+# Current fixed liquid universe: useful for validation, but not a point-in-time
+# constituent set. The research report must retain the survivorship-bias warning.
+selection_method = "fixed_current_liquid_universe"
+prices_adjusted_for_corporate_actions = false
+
+[dataset.start_dates]
+"5m" = 2026-01-01
+"15m" = 2026-01-01
+"1h" = 2020-01-01
+"4h" = 2020-01-01
+"1d" = 2014-01-01
+"1w" = 2014-01-01
+
+[evaluation]
+train_fraction = 0.60
+validation_fraction = 0.20
+test_fraction = 0.20
+minimum_primary_candles_per_split = 60
+walk_forward_folds = 3

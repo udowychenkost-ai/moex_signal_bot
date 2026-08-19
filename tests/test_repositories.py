@@ -1,10 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import func, select
 
 from app.db import create_engine_and_session, init_db
 from app.domain import CandleData, InstrumentData
-from app.models import TelegramUser
+from app.models import Candle, TelegramUser
 from app.repositories import (
     add_watchlist_item,
     deactivate_instruments_except,
@@ -36,6 +37,40 @@ async def test_candle_upsert_replaces_open_candle() -> None:
         stored = await get_candles(session, "SBER", "1d")
     assert len(stored) == 1
     assert stored[0].close == 108
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_large_candle_upsert_is_batched_for_sqlite_parameter_limits() -> None:
+    engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    async with factory() as session, session.begin():
+        await upsert_instruments(session, [InstrumentData("SBER", "TQBR", "Сбербанк")])
+        inserted = await upsert_candles(
+            session,
+            [
+                CandleData(
+                    "SBER",
+                    "TQBR",
+                    "1m",
+                    start + timedelta(minutes=index),
+                    start + timedelta(minutes=index + 1),
+                    100,
+                    101,
+                    99,
+                    100,
+                    1_000,
+                    100_000,
+                )
+                for index in range(1_000)
+            ],
+        )
+    async with factory() as session:
+        count = await session.scalar(select(func.count()).select_from(Candle))
+
+    assert inserted == 1_000
+    assert count == 1_000
     await engine.dispose()
 
 

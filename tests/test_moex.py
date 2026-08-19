@@ -86,6 +86,45 @@ async def test_hourly_candles_are_resampled_to_four_hours() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multi_timeframe_fetch_reuses_one_native_interval() -> None:
+    columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+    calls: list[tuple[int, int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        interval = int(request.url.params["interval"])
+        start = int(request.url.params.get("start", 0))
+        calls.append((interval, start))
+        rows = (
+            [
+                [100 + hour, 101 + hour, 102 + hour, 99 + hour, 1000, 10, begin, end]
+                for hour, begin, end in [
+                    (0, "2025-01-10 10:00:00", "2025-01-10 10:59:59"),
+                    (1, "2025-01-10 11:00:00", "2025-01-10 11:59:59"),
+                    (2, "2025-01-10 12:00:00", "2025-01-10 12:59:59"),
+                    (3, "2025-01-10 13:00:00", "2025-01-10 13:59:59"),
+                ]
+            ]
+            if start == 0
+            else []
+        )
+        return httpx.Response(200, json={"candles": {"columns": columns, "data": rows}})
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_candles_multi(
+            "SBER",
+            ["1h", "4h"],
+            datetime(2025, 1, 10, tzinfo=UTC),
+        )
+
+    assert set(result) == {"1h", "4h"}
+    assert len(result["1h"]) == 4
+    assert {interval for interval, _ in calls} == {60}
+    assert calls == [(60, 0), (60, 4)]
+
+
+@pytest.mark.asyncio
 async def test_no_cursor_pagination_uses_offset_and_stops_on_empty_page() -> None:
     calls: list[int] = []
 
