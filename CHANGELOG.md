@@ -20,6 +20,21 @@
   Docker/PostgreSQL healthchecks and Ubuntu VPS runbook in `DEPLOY.md`.
 - Alembic revision `20260820_0008` for observation modes, snapshots, job state
   and notification outbox.
+- Alembic revision `20260820_0009` for sector classification, IMOEX/secondary
+  market candles, contextual decision fields and point-in-time fundamental
+  reports.
+- `MarketRegimeService`: IMOEX BULL/BEAR/SIDEWAYS, causal volatility state,
+  drawdown/ATR, horizon-relative strength and mandatory live scoring context.
+- Eight transparent contextual technical components with confirmed momentum
+  extremes, directional relative volume/OBV and volume-confirmed level breaks.
+- Provider-based reviewed official fundamental imports, sector-relative scoring
+  and immutable publication metadata; missing coverage is never synthesized.
+- Fixed A–F ablation command with explicit `not_evaluable` fundamental variants
+  when point-in-time coverage is absent, plus broad-crash oversold regression.
+- OOS/WF promotion gate retained `legacy` for all horizons: POSITION full
+  improved expectancy but increased drawdown and lacked fundamentals; SWING
+  full remained negative. Market context is collected for forward analysis
+  without a hidden production scoring switch.
 
 - Separate `TradingIdea` domain model, ORM schema and event history; an internal
   `Signal` is no longer exposed as a complete user trade setup.

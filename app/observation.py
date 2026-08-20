@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.domain import IdeaHorizon, StaleMarketDataError
 from app.horizons import get_horizon_profile
-from app.models import Candle, Instrument
+from app.models import Candle, Instrument, MarketCandle
 
 TIMEFRAME_DURATIONS = {
     "5m": timedelta(minutes=5),
@@ -132,6 +132,45 @@ class DataFreshnessGuard:
             )
         return records
 
+    async def check_market_context(
+        self,
+        timeframes: list[str],
+        *,
+        now: datetime | None = None,
+    ) -> list[FreshnessRecord]:
+        if not self.settings.market_context_enabled:
+            return []
+        checked_at = aware_utc(now or datetime.now(UTC))
+        limits = self.settings.freshness_limits
+        records: list[FreshnessRecord] = []
+        async with self.session_factory() as session:
+            for timeframe in timeframes:
+                duration = TIMEFRAME_DURATIONS[timeframe]
+                latest = await session.scalar(
+                    select(func.max(MarketCandle.end)).where(
+                        MarketCandle.symbol == self.settings.market_benchmark.upper(),
+                        MarketCandle.timeframe == timeframe,
+                        MarketCandle.begin <= checked_at - duration,
+                    )
+                )
+                age = (
+                    max(0.0, (checked_at - aware_utc(latest)).total_seconds() / 60)
+                    if latest is not None
+                    else None
+                )
+                limit = limits[timeframe]
+                records.append(
+                    FreshnessRecord(
+                        ticker=self.settings.market_benchmark.upper(),
+                        timeframe=timeframe,
+                        latest_at=latest,
+                        age_minutes=age,
+                        limit_minutes=limit,
+                        is_fresh=age is not None and age <= limit,
+                    )
+                )
+        return records
+
     async def overview(self, *, now: datetime | None = None) -> FreshnessOverview:
         checked_at = aware_utc(now or datetime.now(UTC))
         async with self.session_factory() as session:
@@ -147,6 +186,12 @@ class DataFreshnessGuard:
             records.extend(
                 await self.check(ticker, self.settings.analysis_timeframe_list, now=checked_at)
             )
+        records.extend(
+            await self.check_market_context(
+                self.settings.analysis_timeframe_list,
+                now=checked_at,
+            )
+        )
         latest = max(
             (aware_utc(item.latest_at) for item in records if item.latest_at is not None),
             default=None,

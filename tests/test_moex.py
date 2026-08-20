@@ -161,3 +161,58 @@ async def test_no_cursor_pagination_stops_when_endpoint_ignores_offset() -> None
         ]
     assert calls == 2
     assert len(pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_market_index_candles_use_index_endpoint() -> None:
+    seen_path = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_path
+        seen_path = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "candles": {
+                    "columns": [
+                        "open",
+                        "close",
+                        "high",
+                        "low",
+                        "value",
+                        "volume",
+                        "begin",
+                        "end",
+                    ],
+                    "data": [
+                        [
+                            2800,
+                            2820,
+                            2830,
+                            2790,
+                            1_000_000,
+                            100,
+                            "2025-01-10 00:00:00",
+                            "2025-01-10 23:59:59",
+                        ]
+                    ],
+                },
+                "candles.cursor": {
+                    "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                    "data": [[0, 1, 100]],
+                },
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_market_candles(
+            "IMOEX",
+            "1d",
+            datetime(2025, 1, 1, tzinfo=UTC),
+        )
+
+    assert "/markets/index/securities/IMOEX/candles.json" in seen_path
+    assert result[0].symbol == "IMOEX"
+    assert result[0].close == 2820

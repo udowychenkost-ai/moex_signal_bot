@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from html import escape
@@ -62,6 +63,7 @@ def _format_time(value: datetime | None, timezone: str) -> str:
 
 def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
     rationale = "\n".join(f"• {escape(line)}" for line in idea.rationale.splitlines()[:5] if line)
+    regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
     return (
         "🆕 <b>НОВАЯ ИДЕЯ</b>\n\n"
         f"ID: <code>{idea.id}</code>\n"
@@ -79,6 +81,14 @@ def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
         f"Potential return: <b>+{idea.expected_return_pct:.2f}%</b>\n"
         f"Potential risk: <b>−{idea.risk_pct:.2f}%</b>\n"
         f"Статус: <b>{idea.status}</b>\n\n"
+        "<b>Рыночный контекст</b>\n"
+        f"{regime_icon} IMOEX: <b>{idea.market_regime or 'нет данных'}</b> · "
+        f"vol {idea.market_volatility or 'n/a'}\n"
+        f"Относительная сила: <b>{escape(idea.relative_strength_label or 'недоступно')}</b>\n"
+        f"Объём: <b>{idea.volume_state or 'UNKNOWN'}</b> "
+        f"({float(idea.volume_score or 0):+.0f}/100)\n"
+        f"Momentum extreme: <b>{float(idea.momentum_extreme_score or 0):+.0f}/100</b>\n"
+        f"Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
         f"<b>Rationale</b>\n{rationale}\n\n"
         f"Created at: {_format_time(idea.created_at, timezone)}\n\n"
         "⚠️ Только наблюдение. Реальные сделки не выполняются."
@@ -216,11 +226,37 @@ def format_idea_history(history: IdeaHistory, *, timezone: str) -> str:
         )
     lines.append(_closed_result(idea, history.paper_trade))
     if history.snapshot is not None:
+        factors = json.loads(history.snapshot.factor_scores)
+        components = factors.get("technical_components", {})
+        component_text = " · ".join(
+            f"{escape(str(name))} {float(value):+.0f}" for name, value in components.items()
+        )
+        indicators = json.loads(history.snapshot.relevant_indicators)
+        primary = indicators.get(idea.primary_timeframe, {})
+        publications = json.loads(history.snapshot.fundamental_publications)
+        publication_text = (
+            "; ".join(
+                f"{escape(str(item.get('report_period')))} available "
+                f"{escape(str(item.get('available_from')))} · "
+                f"{escape(str(item.get('source')))}"
+                for item in publications
+            )
+            if publications
+            else "нет point-in-time данных"
+        )
         lines.append(
             "\n<b>Decision snapshot</b>\n"
             f"Technical: {history.snapshot.technical_score:+.2f} · "
+            f"Fundamental: {history.snapshot.fundamental_score:+.2f} · "
             f"Total: {history.snapshot.total_score:+.2f} · "
             f"ATR: {_metric(history.snapshot.atr)}\n"
+            f"IMOEX: {history.snapshot.regime or 'n/a'} · "
+            f"vol {history.snapshot.market_volatility or 'n/a'} · "
+            f"RS {history.snapshot.relative_strength_score:+.1f}\n"
+            f"RSI: {_metric(primary.get('rsi'))} · "
+            f"volume ratio: {_metric(primary.get('volume_ratio'))}\n"
+            f"Components: {component_text or 'n/a'}\n"
+            f"Fundamental publications: {publication_text}\n"
             "Snapshot immutable: да"
         )
     return "\n".join(line for line in lines if line)

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260820_0008"
+HEAD_REVISION = "20260820_0009"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -29,7 +29,9 @@ BASELINE_TABLES = {
 @dataclass(frozen=True, slots=True)
 class SchemaSnapshot:
     tables: frozenset[str]
+    instrument_columns: frozenset[str]
     idea_columns: frozenset[str]
+    snapshot_columns: frozenset[str]
     paper_columns: frozenset[str]
 
 
@@ -53,6 +55,18 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                     if "trading_ideas" in tables
                     else frozenset()
                 )
+                instrument_columns = (
+                    frozenset(column["name"] for column in inspector.get_columns("instruments"))
+                    if "instruments" in tables
+                    else frozenset()
+                )
+                snapshot_columns = (
+                    frozenset(
+                        column["name"] for column in inspector.get_columns("trading_idea_snapshots")
+                    )
+                    if "trading_idea_snapshots" in tables
+                    else frozenset()
+                )
                 paper_columns = (
                     frozenset(column["name"] for column in inspector.get_columns("paper_trades"))
                     if "paper_trades" in tables
@@ -60,7 +74,9 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                 )
                 return SchemaSnapshot(
                     tables=tables,
+                    instrument_columns=instrument_columns,
                     idea_columns=idea_columns,
+                    snapshot_columns=snapshot_columns,
                     paper_columns=paper_columns,
                 )
 
@@ -85,10 +101,37 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
     columns = snapshot.idea_columns
     factor_columns = {"technical_score", "fundamental_score", "news_score", "total_score"}
     execution_columns = {"entry_fill_price", "exit_fill_price", "slippage"}
+    context_idea_columns = {
+        "market_regime",
+        "market_volatility",
+        "market_regime_score",
+        "relative_strength_score",
+        "relative_strength_label",
+        "volume_score",
+        "volume_state",
+        "momentum_extreme_score",
+        "fundamental_label",
+    }
+    context_snapshot_columns = {
+        "market_volatility",
+        "market_regime_score",
+        "relative_strength_score",
+        "volume_score",
+        "momentum_extreme_score",
+        "fundamental_components",
+        "fundamental_publications",
+    }
+    if (
+        {"market_candles", "fundamental_reports"}.issubset(snapshot.tables)
+        and "sector" in snapshot.instrument_columns
+        and context_idea_columns.issubset(columns)
+        and context_snapshot_columns.issubset(snapshot.snapshot_columns)
+    ):
+        return HEAD_REVISION
     if {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(
         snapshot.tables
     ) and "observation_mode" in columns:
-        return HEAD_REVISION
+        return "20260820_0008"
     if (
         "paper_trades" in snapshot.tables
         and factor_columns.issubset(columns)

@@ -13,10 +13,12 @@ from app.repositories import (
     deactivate_instruments_except,
     get_active_instrument,
     latest_candle_begin,
+    latest_market_candle_begin,
     list_active_instruments,
     save_orderbook_snapshot,
     upsert_candles,
     upsert_instruments,
+    upsert_market_candles,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,13 +133,48 @@ class IngestionService:
         results = await asyncio.gather(
             *(sync_one(item.secid, item.board_id) for item in instruments)
         )
+        market_count, market_errors = await self.sync_market_context()
         counters = {
             "candles": sum(result[0] for result in results),
+            "market_candles": market_count,
             "orderbook_levels": sum(result[1] for result in results),
-            "errors": sum(result[2] for result in results),
+            "errors": sum(result[2] for result in results) + market_errors,
         }
         logger.info("Market data sync complete: %s", counters)
         return counters
+
+    async def sync_market_context(self) -> tuple[int, int]:
+        if not self.settings.market_context_enabled:
+            return 0, 0
+        count = 0
+        errors = 0
+        for symbol in self.settings.market_context_symbol_list:
+            # IMOEX is required on every analysis timeframe. Secondary indices
+            # remain daily context and never block idea generation.
+            timeframes = (
+                self.settings.analysis_timeframe_list
+                if symbol == self.settings.market_benchmark.upper()
+                else ["1d"]
+            )
+            for timeframe in timeframes:
+                try:
+                    count += await self.sync_market_candles(symbol, timeframe)
+                except Exception:
+                    errors += 1
+                    logger.exception("Failed to ingest market context %s %s", symbol, timeframe)
+        return count, errors
+
+    async def sync_market_candles(self, symbol: str, timeframe: str) -> int:
+        now = datetime.now(UTC)
+        async with self.session_factory() as session:
+            latest = await latest_market_candle_begin(session, symbol, timeframe)
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=UTC)
+        date_from = latest - OVERLAP[timeframe] if latest else now - LOOKBACK[timeframe]
+        candles = await self.moex.fetch_market_candles(symbol, timeframe, date_from)
+        async with self._write_lock:
+            async with self.session_factory() as session, session.begin():
+                return await upsert_market_candles(session, candles)
 
     async def sync_candles(self, secid: str, timeframe: str, *, board_id: str = "TQBR") -> int:
         now = datetime.now(UTC)

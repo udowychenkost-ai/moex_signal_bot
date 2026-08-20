@@ -10,7 +10,13 @@ from typing import Any
 import httpx
 import pandas as pd
 
-from app.domain import CandleData, InstrumentData, MoexApiError, OrderBookLevelData
+from app.domain import (
+    CandleData,
+    InstrumentData,
+    MarketCandleData,
+    MoexApiError,
+    OrderBookLevelData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +63,7 @@ class MoexClient:
         api_token: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        headers = {"User-Agent": "moex-signal-bot/0.2"}
+        headers = {"User-Agent": "moex-signal-bot/0.3"}
         if api_token:
             headers["Authorization"] = f"Bearer {api_token}"
         self._client = httpx.AsyncClient(
@@ -255,6 +261,51 @@ class MoexClient:
         async for _, rows in self._pages(path, "candles", params):
             raw_rows.extend(rows)
         return raw_rows
+
+    async def fetch_market_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        date_from: datetime,
+        *,
+        date_to: datetime | None = None,
+    ) -> list[MarketCandleData]:
+        if timeframe not in SOURCE_INTERVALS:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        source_interval = SOURCE_INTERVALS[timeframe]
+        path = f"/engines/stock/markets/index/securities/{symbol.upper()}/candles.json"
+        params = {
+            "iss.only": "candles,candles.cursor",
+            "candles.columns": "open,close,high,low,value,volume,begin,end",
+            "interval": source_interval,
+            "from": date_from.astimezone(UTC).date().isoformat(),
+            "till": (date_to or datetime.now(UTC)).astimezone(UTC).date().isoformat(),
+        }
+        raw_rows: list[dict[str, Any]] = []
+        async for _, rows in self._pages(path, "candles", params):
+            raw_rows.extend(rows)
+        if timeframe in RESAMPLE_RULES:
+            raw_rows = self._resample(raw_rows, RESAMPLE_RULES[timeframe])
+        result: list[MarketCandleData] = []
+        for row in raw_rows:
+            required = ("open", "high", "low", "close", "begin", "end")
+            if any(row.get(key) is None for key in required):
+                continue
+            result.append(
+                MarketCandleData(
+                    symbol=symbol.upper(),
+                    timeframe=timeframe,
+                    begin=_parse_moex_datetime(str(row["begin"])),
+                    end=_parse_moex_datetime(str(row["end"])),
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=float(row.get("volume") or 0),
+                    value=float(row.get("value") or 0),
+                )
+            )
+        return result
 
     @staticmethod
     def _candle_data(

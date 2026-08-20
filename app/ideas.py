@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.domain import (
+    FundamentalScoreData,
     GeneratedSignal,
     HorizonProfile,
     IdeaDirection,
@@ -15,6 +16,7 @@ from app.domain import (
     InsufficientDataError,
     TradingIdeaData,
 )
+from app.fundamentals import FundamentalAnalysisService
 from app.horizons import get_horizon_profile
 from app.idea_repository import IdeaUpsertResult, create_or_update_idea
 from app.observation import DataFreshnessGuard
@@ -85,6 +87,37 @@ def _unique_rationale(signals: list[GeneratedSignal]) -> list[str]:
     return result or ["Совокупный технический score прошёл порог качества"]
 
 
+def _context_rationale(
+    primary: GeneratedSignal,
+    technical_components: dict[str, float],
+    fundamental: FundamentalScoreData | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if primary.market_regime:
+        reasons.append(
+            f"IMOEX: {primary.market_regime}, режим {primary.market_regime_score:+.0f}/100"
+        )
+    if primary.relative_strength_label != "недоступно":
+        reasons.append(
+            f"Относительная сила к IMOEX: {primary.relative_strength_label} "
+            f"({primary.relative_strength_score:+.0f}/100)"
+        )
+    volume = technical_components.get("volume", 0.0)
+    if abs(volume) >= 15:
+        reasons.append(f"Объём {primary.volume_state.lower()}: подтверждение {volume:+.0f}/100")
+    extreme = technical_components.get("momentum_extreme", 0.0)
+    if abs(extreme) >= 10:
+        direction = (
+            "восстановление из перепроданности" if extreme > 0 else "ослабление из перекупленности"
+        )
+        reasons.append(f"Momentum extreme: {direction} ({extreme:+.0f}/100)")
+    if fundamental is not None and fundamental.publications:
+        reasons.append(
+            f"Фундаментал: {fundamental.label} относительно сектора ({fundamental.score:+.0f}/100)"
+        )
+    return reasons
+
+
 def build_trading_idea(
     settings: Settings,
     *,
@@ -93,6 +126,7 @@ def build_trading_idea(
     signals: list[GeneratedSignal],
     now: datetime | None = None,
     fundamental_score: float | None = None,
+    fundamental_result: FundamentalScoreData | None = None,
     news_score: float | None = None,
     profile: HorizonProfile | None = None,
 ) -> TradingIdeaData | None:
@@ -119,10 +153,15 @@ def build_trading_idea(
         )
         / weight_total
     )
+    effective_fundamental = (
+        fundamental_result.score
+        if fundamental_result is not None and fundamental_result.publications
+        else fundamental_score
+    )
     factor_values = {"technical": technical_score}
     factor_weights = {"technical": selected_profile.technical_weight}
-    if fundamental_score is not None:
-        factor_values["fundamental"] = fundamental_score
+    if effective_fundamental is not None:
+        factor_values["fundamental"] = effective_fundamental
         factor_weights["fundamental"] = selected_profile.fundamental_weight
     if news_score is not None:
         factor_values["news"] = news_score
@@ -190,10 +229,27 @@ def build_trading_idea(
     # Every forward idea starts pending. The formation candle cannot also prove
     # activation; only a later completed primary candle may touch the frozen zone.
     status = IdeaStatus.INVALIDATED if already_invalid else IdeaStatus.PENDING_ENTRY
-    factor_scores = {timeframe: by_timeframe[timeframe].factor_scores for timeframe in available}
+    technical_components = {
+        component: round(
+            sum(
+                by_timeframe[timeframe].raw_component_scores.get(component, 0.0) * weight
+                for timeframe, weight in available.items()
+            )
+            / weight_total,
+            4,
+        )
+        for component in selected_profile.technical_component_weights
+    }
+    factor_scores: dict[str, object] = {
+        timeframe: by_timeframe[timeframe].factor_scores for timeframe in available
+    }
+    factor_scores["technical_components"] = technical_components
+    factor_scores["factor_mix"] = {name: round(value, 4) for name, value in factor_values.items()}
     relevant_indicators = {
         timeframe: by_timeframe[timeframe].relevant_indicators for timeframe in available
     }
+    rationale = _context_rationale(primary, technical_components, fundamental_result)
+    rationale.extend(_unique_rationale([by_timeframe[key] for key in available]))
     return TradingIdeaData(
         ticker=primary.secid,
         instrument_name=instrument_name,
@@ -209,7 +265,7 @@ def build_trading_idea(
         expected_return_pct=round(expected_return, 4),
         risk_pct=round(potential_loss, 4),
         risk_reward_ratio=round(risk.reward_risk_ratio, 4),
-        rationale=_unique_rationale([by_timeframe[key] for key in available]),
+        rationale=rationale[:8],
         invalidation_reason=invalidation,
         status=status,
         created_at=timestamp,
@@ -220,13 +276,24 @@ def build_trading_idea(
         source_timeframes=list(available),
         source_candle_begin=primary.candle_begin,
         technical_score=round(technical_score, 4),
-        fundamental_score=round(fundamental_score or 0.0, 4),
+        fundamental_score=round(effective_fundamental or 0.0, 4),
         news_score=round(news_score or 0.0, 4),
         total_score=round(total_score, 4),
         observation_mode=settings.observation_mode(horizon),
         atr=primary.atr,
         factor_scores=factor_scores,
         relevant_indicators=relevant_indicators,
+        regime=primary.market_regime,
+        market_volatility=primary.market_volatility,
+        market_regime_score=primary.market_regime_score,
+        relative_strength_score=primary.relative_strength_score,
+        relative_strength_label=primary.relative_strength_label,
+        volume_score=technical_components.get("volume", 0.0),
+        volume_state=primary.volume_state,
+        momentum_extreme_score=technical_components.get("momentum_extreme", 0.0),
+        fundamental_components=(fundamental_result.components if fundamental_result else {}),
+        fundamental_publications=(fundamental_result.publications if fundamental_result else []),
+        fundamental_label=(fundamental_result.label if fundamental_result else "нет данных"),
     )
 
 
@@ -237,11 +304,13 @@ class TradingIdeaGenerator:
         session_factory: async_sessionmaker[AsyncSession],
         signals: SignalService,
         freshness: DataFreshnessGuard | None = None,
+        fundamentals: FundamentalAnalysisService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.signals = signals
         self.freshness = freshness
+        self.fundamentals = fundamentals
 
     async def generate(
         self,
@@ -258,16 +327,45 @@ class TradingIdeaGenerator:
             return None
 
         generated_signals: list[GeneratedSignal] = []
+        scoring_model = self.settings.horizon_scoring_model(horizon)
         for timeframe in profile.timeframe_weights:
             try:
-                generated_signals.append(await self.signals.generate(ticker, timeframe))
+                if (
+                    scoring_model == "contextual"
+                    or scoring_model != self.settings.technical_scoring_model
+                ):
+                    generated = await self.signals.generate(
+                        ticker,
+                        timeframe,
+                        contextual_weights=(
+                            profile.technical_component_weights
+                            if scoring_model == "contextual"
+                            else None
+                        ),
+                        scoring_model=scoring_model,
+                    )
+                else:
+                    generated = await self.signals.generate(ticker, timeframe)
+                generated_signals.append(generated)
             except InsufficientDataError:
                 continue
+        fundamental = None
+        primary_signal = next(
+            (
+                signal
+                for signal in generated_signals
+                if signal.timeframe == profile.primary_timeframe
+            ),
+            None,
+        )
+        if self.fundamentals is not None and primary_signal is not None:
+            fundamental = await self.fundamentals.score_at(ticker, primary_signal.candle_begin)
         candidate = build_trading_idea(
             self.settings,
             instrument_name=instrument.short_name,
             horizon=horizon,
             signals=generated_signals,
+            fundamental_result=fundamental,
         )
         if candidate is None or candidate.status == IdeaStatus.INVALIDATED:
             return None

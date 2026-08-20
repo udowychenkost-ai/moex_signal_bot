@@ -9,21 +9,24 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis import TechnicalFeatures
 from app.backtest import BacktestEngine, BacktestResult, HistoryIndex
 from app.config import Settings
-from app.domain import CandleData, IdeaHorizon
+from app.domain import CandleData, IdeaHorizon, MarketContextData
 from app.horizons import get_horizon_profile
-from app.models import Instrument
-from app.repositories import get_candles_range
+from app.models import FundamentalReport, Instrument
+from app.observation import completed_candles
+from app.repositories import get_candles_range, get_market_candles_range
 from app.research_baselines import run_long_baseline
 from app.research_data import ResearchDatasetConfig
 from app.research_eval import (
     DatasetSplits,
     EvaluationSplit,
     StrategyConfiguration,
+    ablation_candidates,
     aggregate_results,
     calibration_candidates,
     chronological_splits,
@@ -31,7 +34,7 @@ from app.research_eval import (
     stability_score,
     walk_forward_splits,
 )
-from app.research_features import ResearchTechnicalSeries
+from app.research_features import ResearchMarketContextSeries, ResearchTechnicalSeries
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,8 @@ class ResearchInstrument:
     candles_by_timeframe: dict[str, list[CandleData]]
     features_by_timeframe: dict[str, ResearchTechnicalSeries]
     indexes_by_timeframe: dict[str, HistoryIndex]
+    benchmark_by_timeframe: dict[str, list[object]]
+    market_context_by_timeframe: dict[str, ResearchMarketContextSeries]
 
     def provide_features(
         self,
@@ -52,6 +57,24 @@ class ResearchInstrument:
         history: list[object],
     ) -> TechnicalFeatures:
         return self.features_by_timeframe[timeframe].at_end(history[-1].end)
+
+    def provide_market_context(
+        self,
+        _ticker: str,
+        timeframe: str,
+        history: list[object],
+        decision_at: datetime,
+    ) -> MarketContextData:
+        del decision_at
+        series = self.market_context_by_timeframe.get(timeframe)
+        if series is None:
+            series = ResearchMarketContextSeries(
+                self.benchmark_by_timeframe[timeframe],
+                self.candles_by_timeframe[timeframe],
+                timeframe,
+            )
+            self.market_context_by_timeframe[timeframe] = series
+        return series.at_end(history[-1].end)
 
 
 def _utc(value: datetime) -> datetime:
@@ -141,6 +164,13 @@ class ResearchRunner:
         profile = get_horizon_profile(horizon)
         result: list[ResearchInstrument] = []
         async with self.session_factory() as session:
+            benchmark_histories = {
+                timeframe: completed_candles(
+                    list(await get_market_candles_range(session, "IMOEX", timeframe)),
+                    timeframe,
+                )
+                for timeframe in profile.timeframe_weights
+            }
             for ticker in tickers:
                 instrument = await session.get(Instrument, ticker)
                 if instrument is None:
@@ -148,7 +178,10 @@ class ResearchRunner:
                     continue
                 histories: dict[str, list[CandleData]] = {}
                 for timeframe in profile.timeframe_weights:
-                    rows = await get_candles_range(session, ticker, timeframe)
+                    rows = completed_candles(
+                        list(await get_candles_range(session, ticker, timeframe)),
+                        timeframe,
+                    )
                     histories[timeframe] = [
                         CandleData(
                             secid=row.secid,
@@ -181,6 +214,8 @@ class ResearchRunner:
                                 timeframe: HistoryIndex.build(candles)
                                 for timeframe, candles in histories.items()
                             },
+                            benchmark_by_timeframe=benchmark_histories,
+                            market_context_by_timeframe={},
                         )
                     )
         return result
@@ -197,6 +232,7 @@ class ResearchRunner:
         allocation = self.settings.paper_account_size / len(instruments)
         research_settings = configuration.settings(self.settings)
         profile = configuration.profile(get_horizon_profile(horizon))
+        contextual = configuration.scoring_model == "contextual"
 
         def evaluate_instrument(instrument: ResearchInstrument) -> BacktestResult:
             return BacktestEngine(research_settings).run(
@@ -211,6 +247,7 @@ class ResearchRunner:
                 profile=profile,
                 feature_provider=instrument.provide_features,
                 prepared_indexes=instrument.indexes_by_timeframe,
+                market_context_provider=(instrument.provide_market_context if contextual else None),
             )
 
         worker_count = min(self.settings.research_workers, len(instruments))
@@ -479,6 +516,105 @@ class ResearchRunner:
                 "walk_forward": walk_forward,
             }
         )
+
+    async def run_ablation(
+        self,
+        *,
+        tickers: tuple[str, ...] | None = None,
+        horizons: tuple[IdeaHorizon, ...] = (
+            IdeaHorizon.POSITION_1M,
+            IdeaHorizon.SWING_5D,
+        ),
+    ) -> dict[str, object]:
+        selected_tickers = tickers or self.config.tickers
+        candidates = ablation_candidates()
+        async with self.session_factory() as session:
+            fundamental_tickers = int(
+                await session.scalar(
+                    select(func.count(func.distinct(FundamentalReport.ticker))).where(
+                        FundamentalReport.ticker.in_(selected_tickers)
+                    )
+                )
+                or 0
+            )
+        payload: dict[str, object] = {
+            "generated_at": datetime.now(UTC),
+            "dataset": self.config.name,
+            "universe": list(selected_tickers),
+            "fundamental_coverage": {
+                "covered_tickers": fundamental_tickers,
+                "requested_tickers": len(selected_tickers),
+                "coverage_pct": round(fundamental_tickers / len(selected_tickers) * 100, 2),
+            },
+            "variants": {
+                "A": "current technical baseline_v1",
+                "B": "contextual technical + IMOEX regime; volume/RS/extreme ablated",
+                "C": "contextual technical + improved volume; regime/RS/extreme ablated",
+                "D": "not_evaluable_without_point_in_time_fundamentals",
+                "E": "not_evaluable_without_point_in_time_fundamentals",
+                "F": (
+                    "contextual full available market model; fundamental leg is not "
+                    "claimable when coverage is zero"
+                ),
+            },
+            "horizons": {},
+        }
+        horizon_payload = payload["horizons"]
+        assert isinstance(horizon_payload, dict)
+        for horizon in horizons:
+            logger.info("Loading ablation dataset for %s", horizon.value)
+            instruments = await self._load_horizon(horizon, selected_tickers)
+            primary = get_horizon_profile(horizon).primary_timeframe
+            start = datetime.combine(self.config.start_dates[primary], datetime.min.time(), UTC)
+            last = max(
+                _utc(candle.end)
+                for instrument in instruments
+                for candle in instrument.candles_by_timeframe[primary]
+            )
+            end = last + timedelta(microseconds=1)
+            splits = chronological_splits(
+                start,
+                end,
+                train_fraction=self.config.evaluation.train_fraction,
+                validation_fraction=self.config.evaluation.validation_fraction,
+                test_fraction=self.config.evaluation.test_fraction,
+            )
+            folds = walk_forward_splits(
+                start,
+                end,
+                folds=self.config.evaluation.walk_forward_folds,
+            )
+            variants: dict[str, object] = {}
+            for configuration in candidates:
+                logger.info("Ablation %s / %s", horizon.value, configuration.name)
+                test = self._evaluate(configuration, horizon, instruments, splits.test)
+                unseen = [
+                    self._evaluate(configuration, horizon, instruments, split) for _, split in folds
+                ]
+                variants[configuration.name] = {
+                    "configuration": configuration.as_dict(),
+                    "oos_test": result_payload(test),
+                    "walk_forward_unseen": result_payload(
+                        aggregate_results(
+                            unseen,
+                            initial_equity=self.settings.paper_account_size,
+                        )
+                    ),
+                }
+            horizon_payload[horizon.value] = {
+                "splits": splits.as_dict(),
+                "available_tickers": [item.ticker for item in instruments],
+                "results": variants,
+                "selection_note": (
+                    "fixed variants; TRAIN/VALIDATION are declared but not replayed "
+                    "because no parameter selection occurs in this ablation"
+                ),
+                "fundamental_variants": {
+                    "D_technical_fundamental": "not_evaluable",
+                    "E_regime_fundamental": "not_evaluable",
+                },
+            }
+        return _json_safe(payload)
 
 
 def write_research_outputs(output_dir: Path, payload: dict[str, object]) -> None:

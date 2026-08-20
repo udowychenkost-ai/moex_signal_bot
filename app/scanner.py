@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain import IdeaHorizon, StaleMarketDataError
+from app.fundamentals import FundamentalIngestionService
 from app.idea_tracker import IdeaTracker
 from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
@@ -22,16 +23,22 @@ class MarketScanner:
         ideas: TradingIdeaGenerator,
         tracker: IdeaTracker,
         paper: PaperTradingService | None = None,
+        fundamentals: FundamentalIngestionService | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.ingestion = ingestion
         self.ideas = ideas
         self.tracker = tracker
         self.paper = paper
+        self.fundamentals = fundamentals
 
     async def ingest(self) -> dict[str, int]:
         await self.ingestion.sync_universe()
-        return await self.ingestion.sync_all()
+        result = await self.ingestion.sync_all()
+        result["fundamental_reports"] = (
+            await self.fundamentals.sync() if self.fundamentals is not None else 0
+        )
+        return result
 
     async def track_lifecycle(self) -> dict[str, int]:
         return await self.tracker.track_all()

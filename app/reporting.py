@@ -62,6 +62,7 @@ def format_trading_idea(idea: TradingIdea, *, timezone: str = "Europe/Moscow") -
     action = "ПОКУПКА" if direction == IdeaDirection.BUY else "ПРОДАЖА"
     zone_label = "покупки" if direction == IdeaDirection.BUY else "продажи"
     formed = _aware_utc(idea.created_at).astimezone(ZoneInfo(timezone))
+    regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
     return (
         f"{icon} <b>{action} — {escape(idea.instrument_name)}</b>\n\n"
         f"<b>{escape(idea.ticker)}</b>\n\n"
@@ -75,6 +76,12 @@ def format_trading_idea(idea: TradingIdea, *, timezone: str = "Europe/Moscow") -
         f"Риск: <b>−{idea.risk_pct:.1f}%</b>\n"
         f"Risk/Reward: <b>1:{idea.risk_reward_ratio:.1f}</b>\n\n"
         f"🔥 Уверенность: <b>{idea.confidence:.0f}%</b>\n\n"
+        f"{regime_icon} IMOEX: <b>{idea.market_regime or 'нет данных'}</b> · "
+        f"vol {idea.market_volatility or 'n/a'}\n"
+        f"Относительная сила: <b>{escape(idea.relative_strength_label or 'недоступно')}</b>\n"
+        f"Объём: <b>{idea.volume_state or 'UNKNOWN'}</b> "
+        f"({float(idea.volume_score or 0):+.0f}/100)\n"
+        f"Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
         f"⚠️ {escape(idea.invalidation_reason)}\n\n"
         f"Сформировано: {formed:%d.%m.%Y %H:%M} МСК\n\n"
         "Не является индивидуальной инвестиционной рекомендацией."

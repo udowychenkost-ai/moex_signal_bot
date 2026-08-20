@@ -38,6 +38,15 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
         "news_score": data.news_score,
         "total_score": data.total_score,
         "observation_mode": data.observation_mode,
+        "market_regime": data.regime,
+        "market_volatility": data.market_volatility,
+        "market_regime_score": data.market_regime_score,
+        "relative_strength_score": data.relative_strength_score,
+        "relative_strength_label": data.relative_strength_label,
+        "volume_score": data.volume_score,
+        "volume_state": data.volume_state,
+        "momentum_extreme_score": data.momentum_extreme_score,
+        "fundamental_label": data.fundamental_label,
         "expected_return_pct": data.expected_return_pct,
         "risk_pct": data.risk_pct,
         "risk_reward_ratio": data.risk_reward_ratio,
@@ -215,6 +224,23 @@ async def create_or_update_idea(
                     allow_nan=False,
                 ),
                 regime=data.regime,
+                market_volatility=data.market_volatility,
+                market_regime_score=data.market_regime_score,
+                relative_strength_score=data.relative_strength_score,
+                volume_score=data.volume_score,
+                momentum_extreme_score=data.momentum_extreme_score,
+                fundamental_components=json.dumps(
+                    data.fundamental_components,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                ),
+                fundamental_publications=json.dumps(
+                    data.fundamental_publications,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                ),
             )
         )
         add_idea_event(
@@ -247,6 +273,15 @@ async def create_or_update_idea(
     existing.fundamental_score = data.fundamental_score
     existing.news_score = data.news_score
     existing.total_score = data.total_score
+    existing.market_regime = data.regime
+    existing.market_volatility = data.market_volatility
+    existing.market_regime_score = data.market_regime_score
+    existing.relative_strength_score = data.relative_strength_score
+    existing.relative_strength_label = data.relative_strength_label
+    existing.volume_score = data.volume_score
+    existing.volume_state = data.volume_state
+    existing.momentum_extreme_score = data.momentum_extreme_score
+    existing.fundamental_label = data.fundamental_label
     existing.rationale = "\n".join(data.rationale)
     existing.material_hash = material_hash
     existing.version += 1

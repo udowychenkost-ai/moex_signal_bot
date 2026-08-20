@@ -15,8 +15,10 @@ from app.moex import SOURCE_INTERVALS, MoexClient
 from app.repositories import (
     candle_coverage,
     latest_candle_begin,
+    latest_market_candle_begin,
     upsert_candles,
     upsert_instruments,
+    upsert_market_candles,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,6 +156,33 @@ class ResearchDataService:
                             counts[timeframe] += await upsert_candles(session, selected)
         return counts
 
+    async def _sync_market_benchmark(
+        self,
+        symbol: str,
+        *,
+        date_to: datetime,
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for timeframe, start_date in self.config.start_dates.items():
+            configured = _at_utc_start(start_date)
+            async with self.session_factory() as session:
+                latest = await latest_market_candle_begin(session, symbol, timeframe)
+            if latest is not None and latest.tzinfo is None:
+                latest = latest.replace(tzinfo=UTC)
+            start = max(configured, latest - OVERLAP[timeframe]) if latest else configured
+            async with self._semaphore:
+                candles = await self.moex.fetch_market_candles(
+                    symbol,
+                    timeframe,
+                    start,
+                    date_to=date_to,
+                )
+            selected = [candle for candle in candles if candle.end <= date_to]
+            async with self._write_lock:
+                async with self.session_factory() as session, session.begin():
+                    counts[timeframe] = await upsert_market_candles(session, selected)
+        return counts
+
     async def sync(self, *, date_to: datetime | None = None) -> dict[str, object]:
         cutoff = date_to or datetime.now(UTC)
         available = {
@@ -171,6 +200,12 @@ class ResearchDataService:
             return_exceptions=True,
         )
         errors: dict[str, str] = {}
+        market_context: dict[str, int] = {}
+        try:
+            market_context = await self._sync_market_benchmark("IMOEX", date_to=cutoff)
+        except Exception as error:
+            errors["IMOEX"] = str(error)
+            logger.exception("Research market-context ingestion failed for IMOEX")
         inserted: dict[str, dict[str, int]] = {}
         for instrument, result in zip(selected, results, strict=True):
             if isinstance(result, BaseException):
@@ -192,6 +227,7 @@ class ResearchDataService:
                 self.config.prices_adjusted_for_corporate_actions
             ),
             "inserted": inserted,
+            "market_context_inserted": market_context,
             "errors": errors,
             "coverage": [{key: _iso(value) for key, value in row.items()} for row in coverage],
         }

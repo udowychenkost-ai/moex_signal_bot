@@ -28,7 +28,18 @@ Edit `.env` and set at minimum:
 - `TELEGRAM_ADMIN_CHAT_IDS` to the numeric Telegram chat ID that must always
   receive observation notifications;
 - one long random `POSTGRES_PASSWORD` and exactly the same URL-encoded password
-  inside `DATABASE_URL`.
+inside `DATABASE_URL`.
+
+Market context defaults are deployment-safe: `IMOEX` is mandatory and
+`RTSI,RGBITR,RVI` are secondary daily diagnostics. Keep
+`TECHNICAL_SCORING_MODEL=legacy` unless the committed OOS report explicitly
+promotes the contextual candidate.
+
+Fundamental input is optional and read-only mounted from
+`./fundamentals/official.json`. Do not populate it with estimates or scraped
+aggregator values. Each normalized report must retain its official URL,
+`publication_date` and `available_from`; see `fundamentals/README.md`. With no
+verified file the bot remains operational and shows `Фундаментал: нет данных`.
 
 Do not add broker tokens. Start a Telegram conversation with the bot and issue
 `/start`; this also registers the chat for commands.
@@ -47,6 +58,10 @@ docker compose ps
 the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
+
+On first deployment wait for ingestion of stock and IMOEX histories before
+expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
+benchmark warm-up is complete; ideas are blocked during that state.
 
 ## 3. Logs and health
 

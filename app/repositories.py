@@ -7,8 +7,22 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain import CandleData, InstrumentData, OrderBookLevelData
-from app.models import Candle, Instrument, OrderBookLevel, SignalRecord, TelegramUser, WatchlistItem
+from app.domain import (
+    DEFAULT_SECTORS,
+    CandleData,
+    InstrumentData,
+    MarketCandleData,
+    OrderBookLevelData,
+)
+from app.models import (
+    Candle,
+    Instrument,
+    MarketCandle,
+    OrderBookLevel,
+    SignalRecord,
+    TelegramUser,
+    WatchlistItem,
+)
 
 
 def _upsert_statement(session: AsyncSession, model: type, values: list[dict]):
@@ -40,6 +54,11 @@ async def upsert_instruments(session: AsyncSession, items: list[InstrumentData])
             "echelon": item.echelon,
             "is_active": True,
             "updated_at": now,
+            "sector": (
+                item.sector
+                if item.sector != "Unknown"
+                else DEFAULT_SECTORS.get(item.secid, "Unknown")
+            ),
         }
         for item in items
     ]
@@ -60,6 +79,7 @@ async def upsert_instruments(session: AsyncSession, items: list[InstrumentData])
             "echelon": excluded.echelon,
             "is_active": excluded.is_active,
             "updated_at": excluded.updated_at,
+            "sector": excluded.sector,
         },
     )
     await session.execute(statement)
@@ -228,6 +248,101 @@ async def get_candles_after(
         .order_by(Candle.begin.asc())
         .limit(limit)
     )
+    return list(result)
+
+
+async def latest_market_candle_begin(
+    session: AsyncSession, symbol: str, timeframe: str
+) -> datetime | None:
+    return await session.scalar(
+        select(func.max(MarketCandle.begin)).where(
+            MarketCandle.symbol == symbol.upper(),
+            MarketCandle.timeframe == timeframe,
+        )
+    )
+
+
+async def upsert_market_candles(session: AsyncSession, candles: list[MarketCandleData]) -> int:
+    if not candles:
+        return 0
+    values = [
+        {
+            "symbol": item.symbol.upper(),
+            "timeframe": item.timeframe,
+            "begin": item.begin,
+            "end": item.end,
+            "open": item.open,
+            "high": item.high,
+            "low": item.low,
+            "close": item.close,
+            "volume": item.volume,
+            "value": item.value,
+        }
+        for item in candles
+    ]
+    dialect = session.bind.dialect.name if session.bind else ""
+    batch_size = 90 if dialect == "sqlite" else 1_000
+    for offset in range(0, len(values), batch_size):
+        statement = _upsert_statement(session, MarketCandle, values[offset : offset + batch_size])
+        excluded = statement.excluded
+        update_values = {
+            "end": excluded.end,
+            "open": excluded.open,
+            "high": excluded.high,
+            "low": excluded.low,
+            "close": excluded.close,
+            "volume": excluded.volume,
+            "value": excluded.value,
+        }
+        if dialect == "postgresql":
+            statement = statement.on_conflict_do_update(
+                constraint="uq_market_candle_key", set_=update_values
+            )
+        else:
+            statement = statement.on_conflict_do_update(
+                index_elements=["symbol", "timeframe", "begin"],
+                set_=update_values,
+            )
+        await session.execute(statement)
+    return len(values)
+
+
+async def get_market_candles(
+    session: AsyncSession,
+    symbol: str,
+    timeframe: str,
+    *,
+    limit: int = 500,
+) -> list[MarketCandle]:
+    result = await session.scalars(
+        select(MarketCandle)
+        .where(
+            MarketCandle.symbol == symbol.upper(),
+            MarketCandle.timeframe == timeframe,
+        )
+        .order_by(MarketCandle.begin.desc())
+        .limit(limit)
+    )
+    return list(reversed(list(result)))
+
+
+async def get_market_candles_range(
+    session: AsyncSession,
+    symbol: str,
+    timeframe: str,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> list[MarketCandle]:
+    statement = select(MarketCandle).where(
+        MarketCandle.symbol == symbol.upper(),
+        MarketCandle.timeframe == timeframe,
+    )
+    if date_from is not None:
+        statement = statement.where(MarketCandle.end >= date_from)
+    if date_to is not None:
+        statement = statement.where(MarketCandle.end <= date_to)
+    result = await session.scalars(statement.order_by(MarketCandle.begin.asc()))
     return list(result)
 
 

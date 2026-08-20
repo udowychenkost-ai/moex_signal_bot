@@ -5,6 +5,7 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
 
 from app.analysis import (
@@ -14,7 +15,8 @@ from app.analysis import (
     prepare_technical_features,
     score_technical_features,
 )
-from app.domain import InsufficientDataError
+from app.domain import InsufficientDataError, MarketContextData, StaleMarketDataError
+from app.market_context import ANNUALIZATION
 
 
 def _utc(value: datetime) -> datetime:
@@ -156,6 +158,26 @@ class ResearchTechnicalSeries:
             obv=_optional(row["obv"]),
             support_levels=support_levels,
             resistance_levels=resistance_levels,
+            previous_rsi=_optional(self.frame["rsi_14"].iloc[index - 1]),
+            previous_stochastic_k=_optional(self.frame["stochastic_k"].iloc[index - 1]),
+            current_volume=float(row["volume"]),
+            average_volume=_optional(row["volume_sma_20"]),
+            obv_change_pct=(
+                (float(row["obv"]) - float(self.frame["obv"].iloc[index - 10]))
+                / max(
+                    float(self.frame["volume"].iloc[index - 19 : index + 1].mean()) * 10,
+                    1.0,
+                )
+                * 100
+                if index >= 10
+                else None
+            ),
+            price_return_10_pct=(
+                (current / float(self.frame["close"].iloc[index - 10]) - 1) * 100
+                if index >= 10
+                else None
+            ),
+            bb_width_pct=((float(row["bb_high"]) - float(row["bb_low"])) / current * 100),
         )
 
     def provider(self, _ticker: str, _timeframe: str, history: list[object]) -> TechnicalFeatures:
@@ -193,17 +215,17 @@ class ResearchTechnicalSeries:
                     max_relative_error,
                     abs(actual - expected) / max(abs(expected), 1e-12),
                 )
-            for scoring_model in ("legacy", "weighted"):
-                scores_match &= (
-                    score_technical_features(
-                        prepared,
-                        scoring_model=scoring_model,
-                    ).score
-                    == score_technical_features(
-                        canonical,
-                        scoring_model=scoring_model,
-                    ).score
-                )
+            for scoring_model in ("legacy", "weighted", "contextual"):
+                prepared_score = score_technical_features(
+                    prepared,
+                    scoring_model=scoring_model,
+                ).score
+                canonical_score = score_technical_features(
+                    canonical,
+                    scoring_model=scoring_model,
+                ).score
+                tolerance = 1e-3 if scoring_model == "contextual" else 0.0
+                scores_match &= abs(prepared_score - canonical_score) <= tolerance
         passed = levels_match and scores_match and max_relative_error <= 1e-5
         return {
             "passed": passed,
@@ -212,3 +234,135 @@ class ResearchTechnicalSeries:
             "scores_match": scores_match,
             "maximum_critical_relative_error": max_relative_error,
         }
+
+
+@dataclass
+class ResearchMarketContextSeries:
+    """Causal, vectorized market context keyed by the instrument candle end."""
+
+    benchmark_candles: list[object]
+    instrument_candles: list[object]
+    timeframe: str
+    benchmark: str = "IMOEX"
+
+    def __post_init__(self) -> None:
+        market = self._frame(self.benchmark_candles)
+        stock = self._frame(self.instrument_candles)
+        if market.empty or stock.empty:
+            self._contexts: dict[datetime, MarketContextData] = {}
+            return
+
+        close = market["close"]
+        ema20 = close.ewm(span=20, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
+        sma200 = close.rolling(200).mean()
+        return20 = close.pct_change(20) * 100
+        slope20 = ema50.pct_change(20) * 100
+        drawdown = (close / close.rolling(60).max() - 1) * 100
+        returns = close.pct_change()
+        rolling_vol = returns.rolling(20).std() * math.sqrt(ANNUALIZATION[self.timeframe]) * 100
+
+        def percentile(values: np.ndarray) -> float:
+            finite = values[np.isfinite(values)]
+            if not len(finite):
+                return 50.0
+            return float(np.sum(finite <= finite[-1]) / len(finite) * 100)
+
+        vol_percentile = rolling_vol.rolling(250, min_periods=1).apply(
+            percentile,
+            raw=True,
+        )
+        previous = close.shift(1)
+        true_range = pd.concat(
+            [
+                market["high"] - market["low"],
+                (market["high"] - previous).abs(),
+                (market["low"] - previous).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr_pct = true_range.ewm(alpha=1 / 14, adjust=False).mean() / close * 100
+
+        points = pd.Series(0.0, index=market.index)
+        points += np.where(close > ema20, 22, -22)
+        points += np.where(ema20 > ema50, 22, -22)
+        points += np.where(sma200.isna(), 0, np.where(close > sma200, 24, -24))
+        points += return20.fillna(0).mul(2).clip(-18, 18)
+        points += slope20.fillna(0).mul(3).clip(-10, 10)
+        points += np.where(drawdown <= -15, -12, np.where(drawdown <= -8, -6, 0))
+        points = points.clip(-100, 100)
+
+        market_positions = market.index.get_indexer(stock.index, method="pad")
+        stock_return20 = stock["close"].pct_change(20) * 100
+        contexts: dict[datetime, MarketContextData] = {}
+        for stock_index, market_position in enumerate(market_positions):
+            if stock_index < 20 or market_position < 59:
+                continue
+            end = stock.index[stock_index]
+            benchmark_return = float(return20.iloc[market_position])
+            instrument_return = float(stock_return20.iloc[stock_index])
+            if not math.isfinite(benchmark_return) or not math.isfinite(instrument_return):
+                continue
+            regime_score = float(points.iloc[market_position])
+            relative_score = max(
+                -100.0,
+                min(100.0, (instrument_return - benchmark_return) * 8),
+            )
+            percentile_value = float(vol_percentile.iloc[market_position])
+            volatility = (
+                "EXTREME"
+                if percentile_value >= 90
+                else (
+                    "HIGH"
+                    if percentile_value >= 70
+                    else "LOW"
+                    if percentile_value <= 30
+                    else "NORMAL"
+                )
+            )
+            contexts[_utc(end.to_pydatetime())] = MarketContextData(
+                benchmark=self.benchmark,
+                regime=(
+                    "BULL" if regime_score >= 25 else "BEAR" if regime_score <= -25 else "SIDEWAYS"
+                ),
+                volatility=volatility,
+                regime_score=round(regime_score, 4),
+                relative_strength_score=round(relative_score, 4),
+                relative_strength_label=(
+                    "выше рынка"
+                    if relative_score >= 20
+                    else "ниже рынка"
+                    if relative_score <= -20
+                    else "на уровне рынка"
+                ),
+                benchmark_return_pct=round(benchmark_return, 4),
+                instrument_return_pct=round(instrument_return, 4),
+                drawdown_pct=round(float(drawdown.iloc[market_position]), 4),
+                realized_volatility_pct=round(float(rolling_vol.iloc[market_position]), 4),
+                atr_pct=round(float(atr_pct.iloc[market_position]), 4),
+                as_of=_utc(end.to_pydatetime()),
+            )
+        self._contexts = contexts
+
+    @staticmethod
+    def _frame(candles: list[object]) -> pd.DataFrame:
+        rows = [
+            {
+                "end": _utc(candle.end),
+                "high": float(candle.high),
+                "low": float(candle.low),
+                "close": float(candle.close),
+            }
+            for candle in candles
+        ]
+        if not rows:
+            return pd.DataFrame(columns=["high", "low", "close"])
+        return pd.DataFrame(rows).drop_duplicates("end").set_index("end").sort_index()
+
+    def at_end(self, end: datetime) -> MarketContextData:
+        try:
+            return self._contexts[_utc(end)]
+        except KeyError as error:
+            raise StaleMarketDataError(
+                f"IMOEX {self.timeframe} context unavailable at {_utc(end).isoformat()}"
+            ) from error

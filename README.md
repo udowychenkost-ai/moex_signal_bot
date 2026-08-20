@@ -15,7 +15,13 @@
 - инкрементальная история в SQLite или PostgreSQL с overlap/upsert открытых свечей;
 - единый technical-analysis pipeline: SMA/EMA, MACD, ADX, RSI, Stochastic, CCI,
   Bollinger Bands, ATR, OBV, relative volume и clustered support/resistance;
-- детерминированный BUY/SELL/HOLD и совместимые `legacy`/`weighted` scoring modes;
+- детерминированный BUY/SELL/HOLD и совместимые `legacy`/`weighted`/`contextual`
+  scoring modes; contextual-модель хранит trend/momentum/extreme/volume/levels/
+  volatility/relative-strength/regime components;
+- обязательный IMOEX market context с BULL/BEAR/SIDEWAYS, causal volatility
+  state, drawdown, ATR и relative strength бумаги к индексу;
+- сменный `FundamentalDataProvider`, point-in-time отчёты и sector-relative
+  valuation/profitability/debt/growth/cashflow/dividend scoring без look-ahead;
 - отдельная доменная модель `TradingIdea` с горизонтами 1 день, 5 дней и 1 месяц;
 - диапазон входа, ATR/level TP/SL, минимальный R:R и lot-aware sizing;
 - lifecycle `PENDING_ENTRY → ACTIVE → TP_HIT/SL_HIT/EXPIRED`, включая
@@ -38,16 +44,19 @@
 - Alembic-миграции с автоматическим обновлением распознанной старой схемы.
 - эксплуатационные `/status`, `/stats`, `/ideas`, `/idea ID` и startup recovery.
 
-Fundamental/news/sector scores не загружаются из внешних источников и не входят в
-текущую validation-фазу. Поля и веса для них предусмотрены, а при отсутствии
-данных technical score автоматически перенормируется без изменения поведения.
+Официальный публичный normalized fundamental API в проект не выдумывается.
+Проверенные факты импортируются из `fundamentals/official.json` вместе с
+`publication_date`, `available_from`, источником и URL. Пока файл пуст или
+sector peer coverage недостаточен, fundamental factor честно помечается «нет
+данных», исключается из суммы, а доступные веса перенормируются.
 
 ## Архитектура
 
 ```text
-MOEX ISS → Ingestion → Candles/Order book (DB)
-                          ↓
-Analysis → Scoring → Signal → TradingIdea Generator → Risk Manager
+MOEX ISS → Ingestion → Stock + IMOEX candles (DB)
+                          ↓                 ↓
+Analysis → Scoring ← MarketRegime/RelativeStrength → TradingIdea → Risk
+                 ↖ Point-in-time Fundamentals
                                                     ↓
                                              Idea Repository
                                                     ↓
@@ -107,6 +116,7 @@ python -m app run
 python -m app backtest SBER SWING_5D
 python -m app.research ingest --date-to 2026-08-18
 python -m app.research run
+python -m app.research ablation --horizons POSITION_1M SWING_5D
 ```
 
 `run`, `ingest` и `backtest` сами выполняют Alembic upgrade. Отдельный `migrate`
@@ -157,6 +167,11 @@ SCORE_WEIGHT_VOLUME=15
 SIGNAL_THRESHOLD=25
 ```
 
+`TECHNICAL_SCORING_MODEL=contextual` использует восемь весов из выбранного
+`HorizonProfile`; они не зашиты в engine. Перепроданность даёт положительный
+`momentum_extreme_score` только при подтверждённой стабилизации/восстановлении,
+а BEAR regime дополнительно подавляет ложный mean-reversion BUY.
+
 TP/SL может быть ATR-based или level-based. При небезопасных уровнях движок
 использует ATR fallback; идея ниже `MINIMUM_REWARD_RISK_RATIO` не публикуется.
 
@@ -183,6 +198,18 @@ confidence/year.
 OOS TEST не участвует в выборе. Результаты сохраняются в
 [`reports/backtests`](reports/backtests), включая `BACKTEST_REPORT.md`, fixed
 legacy/weighted baselines, calibration summary, OOS и walk-forward.
+
+`app.research ablation` отдельно фиксирует A/B/C/F market-context варианты.
+D/E, требующие fundamentals, получают статус `not_evaluable`, если в dataset
+нет реального point-in-time coverage; нулевые/синтетические ratios не
+подставляются.
+
+Финальный ablation не изменил production selectors. Для POSITION full-context
+улучшил OOS/WF expectancy, но увеличил OOS max drawdown с 2.44% до 3.47%; regime
+alone был нестабилен, а fundamental coverage равен 0/20. Для SWING full-context
+остался отрицательным (OOS PF 0.926, −0.044R; WF PF 0.982, −0.009R). Поэтому
+INTRADAY/SWING/POSITION сохраняют `legacy`, а новые факторы продолжают
+сохраняться для forward-аудита без скрытого изменения сигналов.
 
 Зафиксированный прогон до `2026-08-18` использовал 20 акций и 1 722 488 свечей.
 Результат после commission/slippage:
@@ -255,6 +282,8 @@ deployment check и не считается выполненной локаль�
 Аудит Claude-кандидата и решения по переносу находятся в
 [`docs/CLAUDE_INTEGRATION_AUDIT.md`](docs/CLAUDE_INTEGRATION_AUDIT.md), история
 изменений — в [`CHANGELOG.md`](CHANGELOG.md), лицензии — в
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+ [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Финальная аналитическая
+граница market context/fundamentals описана в
+[`docs/MARKET_CONTEXT_FUNDAMENTALS.md`](docs/MARKET_CONTEXT_FUNDAMENTALS.md).
 
 Документация MOEX: [AlgoPack / real-time market data](https://moexalgo.github.io/docs/description/realtime/).

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import ta
 
-from app.domain import InsufficientDataError, TechnicalResult
+from app.domain import InsufficientDataError, MarketContextData, TechnicalResult
 
 DEFAULT_SCORING_WEIGHTS = {
     "trend": 25.0,
@@ -15,6 +15,16 @@ DEFAULT_SCORING_WEIGHTS = {
     "macd": 20.0,
     "bollinger": 15.0,
     "volume": 15.0,
+}
+DEFAULT_CONTEXTUAL_WEIGHTS = {
+    "trend": 20.0,
+    "momentum": 12.0,
+    "momentum_extreme": 8.0,
+    "volume": 12.0,
+    "levels": 10.0,
+    "volatility": 8.0,
+    "relative_strength": 14.0,
+    "market_regime": 16.0,
 }
 
 
@@ -48,6 +58,13 @@ class TechnicalFeatures:
     obv: float | None
     support_levels: list[float]
     resistance_levels: list[float]
+    previous_rsi: float | None = None
+    previous_stochastic_k: float | None = None
+    current_volume: float | None = None
+    average_volume: float | None = None
+    obv_change_pct: float | None = None
+    price_return_10_pct: float | None = None
+    bb_width_pct: float | None = None
 
 
 def candle_frame(candles: list[object]) -> pd.DataFrame:
@@ -375,6 +392,139 @@ def _weighted_score(
     return round(score, 2), explanations, contributions
 
 
+def _bounded(value: float) -> float:
+    return max(-100.0, min(100.0, value))
+
+
+def volume_state(volume_ratio: float | None) -> str:
+    if volume_ratio is None or not math.isfinite(volume_ratio):
+        return "UNKNOWN"
+    if volume_ratio >= 3.0:
+        return "EXTREME"
+    if volume_ratio >= 2.0:
+        return "HIGH"
+    if volume_ratio >= 1.3:
+        return "ELEVATED"
+    return "NORMAL"
+
+
+def contextual_component_scores(
+    features: TechnicalFeatures,
+    market_context: MarketContextData | None = None,
+) -> dict[str, float]:
+    price = features.current_price
+    price_change = price / features.previous_close - 1
+
+    trend = 0.0
+    trend += 35 if features.ema20 > features.ema50 else -35
+    trend += 20 if price > features.ema20 else -20
+    if features.sma200 is not None:
+        trend += 25 if price > features.sma200 else -25
+    if features.adx is not None:
+        trend *= 1.15 if features.adx >= 25 else (0.65 if features.adx < 18 else 1.0)
+
+    momentum = _bounded((features.rsi - 50) * 1.2)
+    momentum += 25 if features.macd_histogram > 0 else -25
+    if features.stochastic_k is not None:
+        momentum += (features.stochastic_k - 50) * 0.25
+    momentum = _bounded(momentum)
+
+    volume_direction = 1.0 if price_change > 0 else (-1.0 if price_change < 0 else 0.0)
+    ratio = features.volume_ratio or 1.0
+    volume = volume_direction * min(70.0, max(0.0, (ratio - 1.0) * 55.0))
+    if features.obv_change_pct is not None:
+        volume += _bounded(features.obv_change_pct * 4.0) * 0.3
+    if ratio < 0.75 and abs(price_change) > 0.003:
+        volume -= volume_direction * 20.0
+    volume = _bounded(volume)
+
+    levels = 0.0
+    if features.support and 0 <= (price - features.support) / price <= 0.02:
+        levels += 55
+    if features.resistance and 0 <= (features.resistance - price) / price <= 0.02:
+        levels -= 55
+    for level in features.resistance_levels:
+        if features.previous_close <= level < price:
+            levels += 55 if ratio >= 1.3 else 15
+    for level in features.support_levels:
+        if features.previous_close >= level > price:
+            levels -= 55 if ratio >= 1.3 else 15
+    levels = _bounded(levels)
+
+    oversold = 0.0
+    overbought = 0.0
+    if features.rsi < 40:
+        oversold += min(45.0, (40 - features.rsi) * 2.25)
+    if features.rsi > 60:
+        overbought += min(45.0, (features.rsi - 60) * 2.25)
+    if features.stochastic_k is not None:
+        if features.stochastic_k < 25:
+            oversold += min(25.0, 25 - features.stochastic_k)
+        elif features.stochastic_k > 75:
+            overbought += min(25.0, features.stochastic_k - 75)
+    if features.cci is not None:
+        if features.cci < -100:
+            oversold += min(20.0, (-100 - features.cci) * 0.1)
+        elif features.cci > 100:
+            overbought += min(20.0, (features.cci - 100) * 0.1)
+    if features.bb_percent is not None:
+        if features.bb_percent < 0.1:
+            oversold += min(20.0, (0.1 - features.bb_percent) * 100)
+        elif features.bb_percent > 0.9:
+            overbought += min(20.0, (features.bb_percent - 0.9) * 100)
+
+    recovering = sum(
+        (
+            features.macd_histogram > features.previous_macd_histogram,
+            price >= features.previous_close,
+            levels > 0,
+            volume > 0,
+            features.previous_rsi is not None and features.rsi > features.previous_rsi,
+        )
+    )
+    rolling_over = sum(
+        (
+            features.macd_histogram < features.previous_macd_histogram,
+            price <= features.previous_close,
+            levels < 0,
+            volume < 0,
+            features.previous_rsi is not None and features.rsi < features.previous_rsi,
+        )
+    )
+    oversold_score = oversold * max(0.0, (recovering - 1) / 4)
+    overbought_score = overbought * max(0.0, (rolling_over - 1) / 4)
+    if market_context is not None:
+        if market_context.regime == "BEAR":
+            oversold_score *= 0.35
+        elif market_context.regime == "BULL":
+            overbought_score *= 0.55
+    momentum_extreme = _bounded(oversold_score - overbought_score)
+
+    atr_pct = features.atr / price * 100
+    volatility_quality = 45.0
+    if atr_pct > 5:
+        volatility_quality = -25.0
+    elif atr_pct > 3:
+        volatility_quality = 10.0
+    elif atr_pct < 0.4:
+        volatility_quality = 15.0
+    trend_sign = 1.0 if trend > 0 else (-1.0 if trend < 0 else 0.0)
+    volatility = volatility_quality * trend_sign
+
+    return {
+        "trend": round(_bounded(trend), 4),
+        "momentum": round(momentum, 4),
+        "momentum_extreme": round(momentum_extreme, 4),
+        "volume": round(volume, 4),
+        "levels": round(levels, 4),
+        "volatility": round(_bounded(volatility), 4),
+        "relative_strength": round(
+            market_context.relative_strength_score if market_context else 0.0, 4
+        ),
+        "market_regime": round(market_context.regime_score if market_context else 0.0, 4),
+    }
+
+
 def prepare_technical_features(candles: list[object]) -> TechnicalFeatures:
     if len(candles) < 60:
         raise InsufficientDataError(
@@ -418,6 +568,17 @@ def prepare_technical_features(candles: list[object]) -> TechnicalFeatures:
         obv=_optional_last(frame, "obv"),
         support_levels=levels["support"],
         resistance_levels=levels["resistance"],
+        previous_rsi=_optional_last(frame.iloc[:-1], "rsi_14"),
+        previous_stochastic_k=_optional_last(frame.iloc[:-1], "stochastic_k"),
+        current_volume=float(frame["volume"].iloc[-1]),
+        average_volume=_optional_last(frame, "volume_sma_20"),
+        obv_change_pct=(
+            (float(frame["obv"].iloc[-1]) - float(frame["obv"].iloc[-11]))
+            / max(float(frame["volume"].iloc[-20:].mean()) * 10, 1.0)
+            * 100
+        ),
+        price_return_10_pct=(current_price / float(frame["close"].iloc[-11]) - 1) * 100,
+        bb_width_pct=((float(last["bb_high"]) - float(last["bb_low"])) / current_price * 100),
     )
 
 
@@ -426,6 +587,7 @@ def score_technical_features(
     *,
     scoring_model: str = "legacy",
     weights: dict[str, float] | None = None,
+    market_context: MarketContextData | None = None,
 ) -> TechnicalResult:
     support = features.support
     resistance = features.resistance
@@ -444,8 +606,24 @@ def score_technical_features(
             raise ValueError("At least one technical score weight must be positive")
         normalized = {name: configured_weights[name] / total * 100 for name in configured_weights}
         score, explanations, component_scores = _weighted_score(features, normalized)
+    elif scoring_model == "contextual":
+        configured_weights = weights or DEFAULT_CONTEXTUAL_WEIGHTS
+        missing = set(DEFAULT_CONTEXTUAL_WEIGHTS) - set(configured_weights)
+        if missing:
+            raise ValueError(f"Missing contextual weights: {', '.join(sorted(missing))}")
+        total = sum(configured_weights.values())
+        if total <= 0:
+            raise ValueError("At least one contextual weight must be positive")
+        raw = contextual_component_scores(features, market_context)
+        component_scores = {
+            name: round(raw[name] * configured_weights[name] / total, 4) for name in raw
+        }
+        score = round(_bounded(sum(component_scores.values())), 4)
+        explanations = [f"{name}: {value:+.1f}" for name, value in raw.items() if abs(value) >= 20]
     else:
         raise ValueError(f"Unsupported scoring model: {scoring_model}")
+
+    diagnostic_scores = contextual_component_scores(features, market_context)
 
     return TechnicalResult(
         score=score,
@@ -474,6 +652,7 @@ def score_technical_features(
         support_levels=features.support_levels,
         resistance_levels=features.resistance_levels,
         component_scores=component_scores,
+        diagnostic_scores=diagnostic_scores,
     )
 
 
@@ -483,10 +662,12 @@ def analyze_technical(
     scoring_model: str = "legacy",
     weights: dict[str, float] | None = None,
     features: TechnicalFeatures | None = None,
+    market_context: MarketContextData | None = None,
 ) -> TechnicalResult:
     prepared = features or prepare_technical_features(candles)
     return score_technical_features(
         prepared,
         scoring_model=scoring_model,
         weights=weights,
+        market_context=market_context,
     )

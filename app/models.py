@@ -43,6 +43,7 @@ class Instrument(Base):
     echelon: Mapped[int] = mapped_column(Integer, default=2, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    sector: Mapped[str] = mapped_column(String(32), default="Unknown", index=True)
 
 
 class Candle(Base):
@@ -158,6 +159,15 @@ class TradingIdea(Base):
     news_score: Mapped[float] = mapped_column(Float, default=0)
     total_score: Mapped[float] = mapped_column(Float, default=0)
     observation_mode: Mapped[str] = mapped_column(String(16), default="RESEARCH", index=True)
+    market_regime: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    market_volatility: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    market_regime_score: Mapped[float] = mapped_column(Float, default=0)
+    relative_strength_score: Mapped[float] = mapped_column(Float, default=0)
+    relative_strength_label: Mapped[str] = mapped_column(String(32), default="недоступно")
+    volume_score: Mapped[float] = mapped_column(Float, default=0)
+    volume_state: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    momentum_extreme_score: Mapped[float] = mapped_column(Float, default=0)
+    fundamental_label: Mapped[str] = mapped_column(String(32), default="нет данных")
     expected_return_pct: Mapped[float] = mapped_column(Float)
     risk_pct: Mapped[float] = mapped_column(Float)
     risk_reward_ratio: Mapped[float] = mapped_column(Float)
@@ -226,6 +236,60 @@ class TradingIdeaSnapshot(Base):
     atr: Mapped[float | None] = mapped_column(Float, nullable=True)
     relevant_indicators: Mapped[str] = mapped_column(Text, default="{}")
     regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    market_volatility: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    market_regime_score: Mapped[float] = mapped_column(Float, default=0)
+    relative_strength_score: Mapped[float] = mapped_column(Float, default=0)
+    volume_score: Mapped[float] = mapped_column(Float, default=0)
+    momentum_extreme_score: Mapped[float] = mapped_column(Float, default=0)
+    fundamental_components: Mapped[str] = mapped_column(Text, default="{}")
+    fundamental_publications: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class MarketCandle(Base):
+    __tablename__ = "market_candles"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "begin", name="uq_market_candle_key"),
+        Index("ix_market_candles_lookup", "symbol", "timeframe", "begin"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8))
+    begin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0)
+    value: Mapped[float] = mapped_column(Float, default=0)
+
+
+class FundamentalReport(Base):
+    __tablename__ = "fundamental_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "ticker",
+            "report_period",
+            "available_from",
+            "source",
+            name="uq_fundamental_report_version",
+        ),
+        Index("ix_fundamental_point_in_time", "ticker", "available_from"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(
+        ForeignKey("instruments.secid", ondelete="CASCADE"), index=True
+    )
+    sector: Mapped[str] = mapped_column(String(32), index=True)
+    report_period: Mapped[str] = mapped_column(String(32))
+    publication_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    available_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[str] = mapped_column(String(64))
+    source_url: Mapped[str] = mapped_column(Text)
+    metrics: Mapped[str] = mapped_column(Text)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class IdeaNotification(Base):

@@ -8,9 +8,11 @@ from app.config import Settings
 from app.domain import (
     GeneratedSignal,
     InsufficientDataError,
+    MarketContextData,
     TechnicalResult,
     UnknownTickerError,
 )
+from app.market_context import MarketRegimeService
 from app.models import SignalRecord
 from app.observation import completed_candles
 from app.repositories import get_active_instrument, get_candles
@@ -48,15 +50,22 @@ def analyze_signal_technical(
     candles: list[object],
     *,
     features: TechnicalFeatures | None = None,
+    market_context: MarketContextData | None = None,
+    contextual_weights: dict[str, float] | None = None,
+    scoring_model: str | None = None,
 ) -> TechnicalResult:
-    weights = (
-        settings.technical_score_weights if settings.technical_scoring_model == "weighted" else None
-    )
+    selected_model = scoring_model or settings.technical_scoring_model
+    weights = None
+    if selected_model == "weighted":
+        weights = settings.technical_score_weights
+    elif selected_model == "contextual":
+        weights = contextual_weights
     return analyze_technical(
         candles,
-        scoring_model=settings.technical_scoring_model,
+        scoring_model=selected_model,
         weights=weights,
         features=features,
+        market_context=market_context,
     )
 
 
@@ -68,11 +77,20 @@ def build_signal(
     *,
     risk_per_trade_pct: float | None = None,
     technical_result: TechnicalResult | None = None,
+    market_context: MarketContextData | None = None,
+    contextual_weights: dict[str, float] | None = None,
+    scoring_model: str | None = None,
 ) -> GeneratedSignal:
     """Run the production analysis/scoring/risk pipeline on supplied candles."""
     if not candles:
         raise InsufficientDataError(f"Для {secid} {timeframe} свечи ещё не загружены")
-    technical = technical_result or analyze_signal_technical(settings, candles)
+    technical = technical_result or analyze_signal_technical(
+        settings,
+        candles,
+        market_context=market_context,
+        contextual_weights=contextual_weights,
+        scoring_model=scoring_model,
+    )
     threshold = settings.signal_threshold
     if technical.score >= threshold:
         action = "BUY"
@@ -103,6 +121,17 @@ def build_signal(
         )
     confidence = min(95.0, 50.0 + abs(technical.score) * 0.45)
     horizon = "intraday" if timeframe in {"5m", "15m", "1h"} else "long_term"
+    indicator_snapshot = _technical_snapshot(technical)
+    if market_context is not None:
+        indicator_snapshot.update(
+            {
+                "market_benchmark_return_pct": market_context.benchmark_return_pct,
+                "instrument_return_pct": market_context.instrument_return_pct,
+                "market_drawdown_pct": market_context.drawdown_pct,
+                "market_realized_volatility_pct": (market_context.realized_volatility_pct),
+                "market_atr_pct": market_context.atr_pct,
+            }
+        )
     return GeneratedSignal(
         secid=secid,
         timeframe=timeframe,
@@ -123,7 +152,32 @@ def build_signal(
         support_levels=technical.support_levels,
         resistance_levels=technical.resistance_levels,
         factor_scores=technical.component_scores,
-        relevant_indicators=_technical_snapshot(technical),
+        relevant_indicators=indicator_snapshot,
+        raw_component_scores=technical.diagnostic_scores,
+        market_regime=market_context.regime if market_context else None,
+        market_volatility=market_context.volatility if market_context else None,
+        market_regime_score=(market_context.regime_score if market_context else 0.0),
+        relative_strength_score=(market_context.relative_strength_score if market_context else 0.0),
+        relative_strength_label=(
+            market_context.relative_strength_label if market_context else "недоступно"
+        ),
+        volume_score=technical.diagnostic_scores.get("volume", 0.0),
+        volume_state=(
+            "UNKNOWN"
+            if technical.volume_ratio is None
+            else (
+                "EXTREME"
+                if technical.volume_ratio >= 3
+                else (
+                    "HIGH"
+                    if technical.volume_ratio >= 2
+                    else "ELEVATED"
+                    if technical.volume_ratio >= 1.3
+                    else "NORMAL"
+                )
+            )
+        ),
+        momentum_extreme_score=technical.diagnostic_scores.get("momentum_extreme", 0.0),
     )
 
 
@@ -132,9 +186,11 @@ class SignalService:
         self,
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
+        market_context: MarketRegimeService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
+        self.market_context = market_context
 
     async def generate(
         self,
@@ -143,6 +199,8 @@ class SignalService:
         *,
         risk_per_trade_pct: float | None = None,
         persist: bool = True,
+        contextual_weights: dict[str, float] | None = None,
+        scoring_model: str | None = None,
     ) -> GeneratedSignal:
         secid = secid.upper()
         async with self.session_factory() as session:
@@ -151,12 +209,30 @@ class SignalService:
                 raise UnknownTickerError(f"Неизвестный тикер {secid}")
             candles = await get_candles(session, secid, timeframe, limit=500)
         candles = completed_candles(candles, timeframe)
+        context = None
+        if self.market_context is not None and self.settings.market_context_enabled:
+            context = await self.market_context.analyze(
+                secid,
+                timeframe,
+                instrument_candles=candles,
+            )
+        technical = analyze_signal_technical(
+            self.settings,
+            candles,
+            market_context=context,
+            contextual_weights=contextual_weights,
+            scoring_model=scoring_model,
+        )
         generated = build_signal(
             self.settings,
             secid,
             timeframe,
             candles,
             risk_per_trade_pct=risk_per_trade_pct,
+            market_context=context,
+            contextual_weights=contextual_weights,
+            scoring_model=scoring_model,
+            technical_result=technical,
         )
         if persist:
             async with self.session_factory() as session, session.begin():

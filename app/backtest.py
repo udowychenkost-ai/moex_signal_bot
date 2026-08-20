@@ -10,11 +10,13 @@ from statistics import fmean, median, pstdev
 from app.analysis import TechnicalFeatures, prepare_technical_features
 from app.config import Settings
 from app.domain import (
+    FundamentalScoreData,
     GeneratedSignal,
     HorizonProfile,
     IdeaHorizon,
     IdeaStatus,
     InsufficientDataError,
+    MarketContextData,
     TradingIdeaData,
 )
 from app.horizons import get_horizon_profile
@@ -445,6 +447,12 @@ class BacktestEngine:
         analysis_cache: dict[tuple[object, ...], TechnicalFeatures] | None = None,
         feature_provider: (Callable[[str, str, list[object]], TechnicalFeatures] | None) = None,
         prepared_indexes: dict[str, HistoryIndex] | None = None,
+        market_context_provider: (
+            Callable[[str, str, list[object], datetime], MarketContextData | None] | None
+        ) = None,
+        fundamental_provider: (
+            Callable[[str, datetime], FundamentalScoreData | None] | None
+        ) = None,
     ) -> BacktestResult:
         selected_profile = profile or get_horizon_profile(horizon)
         if selected_profile.horizon != horizon:
@@ -507,10 +515,17 @@ class BacktestEngine:
                             features = prepare_technical_features(history)
                             if analysis_cache is not None:
                                 analysis_cache[cache_key] = features
+                    context = (
+                        market_context_provider(ticker, timeframe, history, decision_at)
+                        if market_context_provider is not None
+                        else None
+                    )
                     technical = analyze_signal_technical(
                         self.settings,
                         history,
                         features=features,
+                        market_context=context,
+                        contextual_weights=selected_profile.technical_component_weights,
                     )
                     generated_signals.append(
                         build_signal(
@@ -519,6 +534,8 @@ class BacktestEngine:
                             timeframe,
                             history,
                             technical_result=technical,
+                            market_context=context,
+                            contextual_weights=selected_profile.technical_component_weights,
                         )
                     )
                 except InsufficientDataError:
@@ -530,6 +547,11 @@ class BacktestEngine:
                 signals=generated_signals,
                 now=decision_at,
                 profile=selected_profile,
+                fundamental_result=(
+                    fundamental_provider(ticker, decision_at)
+                    if fundamental_provider is not None
+                    else None
+                ),
             )
             if candidate is None or candidate.status == IdeaStatus.INVALIDATED:
                 continue

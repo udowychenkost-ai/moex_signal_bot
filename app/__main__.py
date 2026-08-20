@@ -16,11 +16,17 @@ from app.config import get_settings
 from app.db import create_engine_and_session
 from app.domain import IdeaHorizon
 from app.forward import ForwardReportingService
+from app.fundamentals import (
+    FundamentalAnalysisService,
+    FundamentalIngestionService,
+    OfficialDisclosureJsonProvider,
+)
 from app.horizons import get_horizon_profile
 from app.idea_tracker import IdeaTracker
 from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
 from app.logging_config import configure_logging
+from app.market_context import MarketRegimeService
 from app.migrations import migrate_database
 from app.moex import MoexClient
 from app.observation import DataFreshnessGuard
@@ -48,8 +54,17 @@ async def ingest_once() -> None:
             api_token=settings.moex_api_token,
         ) as moex:
             ingestion = IngestionService(settings, session_factory, moex)
+            fundamental_ingestion = FundamentalIngestionService(
+                session_factory,
+                (
+                    [OfficialDisclosureJsonProvider(settings.fundamental_json_path)]
+                    if settings.fundamental_enabled
+                    else []
+                ),
+            )
             await ingestion.sync_universe()
             result = await ingestion.sync_all()
+            result["fundamental_reports"] = await fundamental_ingestion.sync()
             logger.info("One-off ingestion result: %s", result)
     finally:
         await engine.dispose()
@@ -76,7 +91,11 @@ async def run_bot() -> None:
             api_token=settings.moex_api_token,
         ) as moex:
             ingestion = IngestionService(settings, session_factory, moex)
-            signals = SignalService(settings, session_factory)
+            market_context = MarketRegimeService(
+                session_factory,
+                benchmark=settings.market_benchmark,
+            )
+            signals = SignalService(settings, session_factory, market_context)
             tracker = IdeaTracker(session_factory)
             freshness = DataFreshnessGuard(settings, session_factory)
             ideas = TradingIdeaGenerator(
@@ -84,13 +103,33 @@ async def run_bot() -> None:
                 session_factory,
                 signals,
                 freshness=freshness,
+                fundamentals=(
+                    FundamentalAnalysisService(session_factory)
+                    if settings.fundamental_enabled
+                    else None
+                ),
             )
             reporting = ReportingService(
                 session_factory,
                 timezone=settings.scheduler_timezone,
             )
             paper = PaperTradingService(settings, session_factory)
-            scanner = MarketScanner(session_factory, ingestion, ideas, tracker, paper)
+            fundamental_ingestion = FundamentalIngestionService(
+                session_factory,
+                (
+                    [OfficialDisclosureJsonProvider(settings.fundamental_json_path)]
+                    if settings.fundamental_enabled
+                    else []
+                ),
+            )
+            scanner = MarketScanner(
+                session_factory,
+                ingestion,
+                ideas,
+                tracker,
+                paper,
+                fundamentals=fundamental_ingestion,
+            )
             operations = OperationalService(settings, session_factory, freshness)
             forward_reporting = ForwardReportingService(
                 settings,

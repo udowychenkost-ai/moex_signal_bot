@@ -53,6 +53,18 @@ class HorizonProfile:
     atr_take_multiplier: float
     entry_zone_atr: float
     default_expiry: timedelta
+    technical_component_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "trend": 20.0,
+            "momentum": 12.0,
+            "momentum_extreme": 8.0,
+            "volume": 12.0,
+            "levels": 10.0,
+            "volatility": 8.0,
+            "relative_strength": 14.0,
+            "market_regime": 16.0,
+        }
+    )
 
     def __post_init__(self) -> None:
         if not self.timeframe_weights or self.primary_timeframe not in self.timeframe_weights:
@@ -61,6 +73,22 @@ class HorizonProfile:
             raise ValueError("timeframe weights must be non-negative")
         if sum(self.timeframe_weights.values()) <= 0:
             raise ValueError("at least one timeframe weight must be positive")
+        required_components = {
+            "trend",
+            "momentum",
+            "momentum_extreme",
+            "volume",
+            "levels",
+            "volatility",
+            "relative_strength",
+            "market_regime",
+        }
+        if set(self.technical_component_weights) != required_components:
+            raise ValueError("technical_component_weights must define all contextual components")
+        if any(weight < 0 for weight in self.technical_component_weights.values()):
+            raise ValueError("technical component weights must be non-negative")
+        if sum(self.technical_component_weights.values()) <= 0:
+            raise ValueError("at least one technical component weight must be positive")
         factor_total = self.technical_weight + self.fundamental_weight + self.news_weight
         if abs(factor_total - 1.0) > 1e-9:
             raise ValueError("technical, fundamental and news weights must sum to 1")
@@ -76,6 +104,14 @@ class HorizonProfile:
         total = sum(self.timeframe_weights.values())
         return {timeframe: weight / total for timeframe, weight in self.timeframe_weights.items()}
 
+    @property
+    def normalized_technical_component_weights(self) -> dict[str, float]:
+        total = sum(self.technical_component_weights.values())
+        return {
+            component: weight / total
+            for component, weight in self.technical_component_weights.items()
+        }
+
 
 @dataclass(slots=True)
 class InstrumentData:
@@ -90,12 +126,51 @@ class InstrumentData:
     daily_turnover: float | None = None
     free_float: float | None = None
     echelon: int = 2
+    sector: str = "Unknown"
+
+
+DEFAULT_SECTORS: dict[str, str] = {
+    "SBER": "Financials",
+    "VTBR": "Financials",
+    "MOEX": "Financials",
+    "GAZP": "Energy",
+    "LKOH": "Energy",
+    "ROSN": "Energy",
+    "NVTK": "Energy",
+    "TATN": "Energy",
+    "SIBN": "Energy",
+    "SNGS": "Energy",
+    "YDEX": "Information Technology",
+    "GMKN": "Materials",
+    "PLZL": "Materials",
+    "CHMF": "Materials",
+    "NLMK": "Materials",
+    "ALRS": "Materials",
+    "PHOR": "Materials",
+    "MTSS": "Communication Services",
+    "MGNT": "Consumer Staples",
+    "IRAO": "Utilities",
+}
 
 
 @dataclass(slots=True)
 class CandleData:
     secid: str
     board_id: str
+    timeframe: str
+    begin: datetime
+    end: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    value: float
+
+
+@dataclass(slots=True)
+class MarketCandleData:
+    symbol: str
     timeframe: str
     begin: datetime
     end: datetime
@@ -146,6 +221,7 @@ class TechnicalResult:
     support_levels: list[float] = field(default_factory=list)
     resistance_levels: list[float] = field(default_factory=list)
     component_scores: dict[str, float] = field(default_factory=dict)
+    diagnostic_scores: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -202,6 +278,15 @@ class GeneratedSignal:
     resistance_levels: list[float] = field(default_factory=list)
     factor_scores: dict[str, float] = field(default_factory=dict)
     relevant_indicators: dict[str, float | list[float] | None] = field(default_factory=dict)
+    raw_component_scores: dict[str, float] = field(default_factory=dict)
+    market_regime: str | None = None
+    market_volatility: str | None = None
+    market_regime_score: float = 0.0
+    relative_strength_score: float = 0.0
+    relative_strength_label: str = "недоступно"
+    volume_score: float = 0.0
+    volume_state: str = "UNKNOWN"
+    momentum_extreme_score: float = 0.0
 
 
 @dataclass(slots=True)
@@ -245,6 +330,16 @@ class TradingIdeaData:
     factor_scores: dict[str, object] = field(default_factory=dict)
     relevant_indicators: dict[str, object] = field(default_factory=dict)
     regime: str | None = None
+    market_volatility: str | None = None
+    market_regime_score: float = 0.0
+    relative_strength_score: float = 0.0
+    relative_strength_label: str = "недоступно"
+    volume_score: float = 0.0
+    volume_state: str = "UNKNOWN"
+    momentum_extreme_score: float = 0.0
+    fundamental_components: dict[str, float] = field(default_factory=dict)
+    fundamental_publications: list[dict[str, object]] = field(default_factory=list)
+    fundamental_label: str = "нет данных"
 
     @property
     def entry_state(self) -> EntryState:
@@ -253,6 +348,33 @@ class TradingIdeaData:
         if self.status == IdeaStatus.ACTIVE:
             return EntryState.ENTRY_AVAILABLE
         return EntryState.MISSED_INVALID
+
+
+@dataclass(frozen=True, slots=True)
+class MarketContextData:
+    benchmark: str
+    regime: str
+    volatility: str
+    regime_score: float
+    relative_strength_score: float
+    relative_strength_label: str
+    benchmark_return_pct: float
+    instrument_return_pct: float
+    drawdown_pct: float
+    realized_volatility_pct: float
+    atr_pct: float
+    as_of: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalScoreData:
+    score: float
+    components: dict[str, float]
+    metrics: dict[str, float | None]
+    sector: str
+    publications: list[dict[str, object]]
+    label: str
+    as_of: datetime
 
 
 @dataclass(frozen=True, slots=True)

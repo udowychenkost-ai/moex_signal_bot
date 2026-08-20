@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     echelon2_min_daily_turnover: float = 25_000_000
 
     signal_threshold: float = Field(default=25.0, ge=0, le=100)
-    technical_scoring_model: Literal["weighted", "legacy"] = "legacy"
+    technical_scoring_model: Literal["weighted", "legacy", "contextual"] = "legacy"
+    intraday_technical_scoring_model: Literal["weighted", "legacy", "contextual"] = "legacy"
+    swing_technical_scoring_model: Literal["weighted", "legacy", "contextual"] = "legacy"
+    position_technical_scoring_model: Literal["weighted", "legacy", "contextual"] = "legacy"
     score_weight_trend: float = Field(default=25.0, ge=0)
     score_weight_momentum: float = Field(default=25.0, ge=0)
     score_weight_macd: float = Field(default=20.0, ge=0)
@@ -84,6 +87,11 @@ class Settings(BaseSettings):
     research_config_path: str = "research.toml"
     research_output_dir: str = "reports/backtests"
     research_workers: int = Field(default=4, ge=1, le=16)
+    market_benchmark: str = "IMOEX"
+    market_context_symbols: str = "IMOEX,RTSI,RGBITR,RVI"
+    market_context_enabled: bool = True
+    fundamental_enabled: bool = True
+    fundamental_json_path: str = "fundamentals/official.json"
 
     @field_validator("default_timeframe")
     @classmethod
@@ -165,6 +173,23 @@ class Settings(BaseSettings):
             IdeaHorizon.SWING_5D: self.swing_observation_mode,
             IdeaHorizon.POSITION_1M: self.position_observation_mode,
         }[selected]
+
+    def horizon_scoring_model(self, horizon: IdeaHorizon | str) -> str:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_technical_scoring_model,
+            IdeaHorizon.SWING_5D: self.swing_technical_scoring_model,
+            IdeaHorizon.POSITION_1M: self.position_technical_scoring_model,
+        }[selected]
+
+    @property
+    def market_context_symbol_list(self) -> list[str]:
+        symbols = [
+            item.strip().upper() for item in self.market_context_symbols.split(",") if item.strip()
+        ]
+        if self.market_benchmark.upper() not in symbols:
+            symbols.insert(0, self.market_benchmark.upper())
+        return list(dict.fromkeys(symbols))
 
 
 @lru_cache

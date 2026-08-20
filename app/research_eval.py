@@ -109,12 +109,15 @@ class StrategyConfiguration:
     macd_weight: float = 20.0
     bollinger_weight: float = 15.0
     volume_weight: float = 15.0
+    contextual_variant: str = "full"
 
     def __post_init__(self) -> None:
-        if self.scoring_model not in {"legacy", "weighted"}:
-            raise ValueError("scoring model must be legacy or weighted")
+        if self.scoring_model not in {"legacy", "weighted", "contextual"}:
+            raise ValueError("scoring model must be legacy, weighted or contextual")
         if self.timeframe_variant not in {"default", "primary_focus", "context_focus"}:
             raise ValueError("unsupported timeframe variant")
+        if self.contextual_variant not in {"full", "regime", "volume"}:
+            raise ValueError("unsupported contextual variant")
         if (
             min(
                 self.signal_threshold,
@@ -150,9 +153,19 @@ class StrategyConfiguration:
             for timeframe in weights:
                 if timeframe in {"4h", "1d", "1w"}:
                     weights[timeframe] *= 1.25
+        component_weights = dict(base.technical_component_weights)
+        if self.contextual_variant == "regime":
+            component_weights["momentum_extreme"] = 0
+            component_weights["volume"] = 0
+            component_weights["relative_strength"] = 0
+        elif self.contextual_variant == "volume":
+            component_weights["momentum_extreme"] = 0
+            component_weights["relative_strength"] = 0
+            component_weights["market_regime"] = 0
         return replace(
             base,
             timeframe_weights=weights,
+            technical_component_weights=component_weights,
             minimum_confidence=self.minimum_confidence,
             atr_stop_multiplier=base.atr_stop_multiplier * self.atr_scale,
             atr_take_multiplier=base.atr_take_multiplier * self.atr_scale,
@@ -204,6 +217,28 @@ def calibration_candidates() -> list[StrategyConfiguration]:
             momentum_weight=35,
             bollinger_weight=10,
         ),
+    ]
+
+
+def ablation_candidates() -> list[StrategyConfiguration]:
+    """Fixed, declared variants. Fundamental variants require real PIT coverage."""
+    return [
+        StrategyConfiguration("A_baseline_v1", "legacy", 25, 60),
+        StrategyConfiguration(
+            "B_market_regime",
+            "contextual",
+            25,
+            60,
+            contextual_variant="regime",
+        ),
+        StrategyConfiguration(
+            "C_volume",
+            "contextual",
+            25,
+            60,
+            contextual_variant="volume",
+        ),
+        StrategyConfiguration("F_full_available", "contextual", 25, 60),
     ]
 
 

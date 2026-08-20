@@ -101,6 +101,45 @@ async def run_validation(
         await engine.dispose()
 
 
+async def run_ablation(
+    *,
+    tickers: list[str] | None = None,
+    horizons: list[str] | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    config = load_research_config(settings.research_config_path)
+    selected_tickers = tuple(dict.fromkeys(item.upper() for item in tickers)) if tickers else None
+    selected_horizons = (
+        tuple(IdeaHorizon(item.upper()) for item in horizons)
+        if horizons
+        else (IdeaHorizon.POSITION_1M, IdeaHorizon.SWING_5D)
+    )
+    await migrate_database(settings.research_database_url)
+    engine, session_factory = create_engine_and_session(settings.research_database_url)
+    try:
+        result = await ResearchRunner(settings, config, session_factory).run_ablation(
+            tickers=selected_tickers,
+            horizons=selected_horizons,
+        )
+        output_path = Path(settings.research_output_dir) / "ablation_oos.json"
+        if output_path.exists():
+            previous = json.loads(output_path.read_text(encoding="utf-8"))
+            if (
+                previous.get("dataset") == result["dataset"]
+                and previous.get("universe") == result["universe"]
+            ):
+                previous["generated_at"] = result["generated_at"]
+                previous["fundamental_coverage"] = result["fundamental_coverage"]
+                previous["variants"] = result["variants"]
+                previous.setdefault("horizons", {}).update(result["horizons"])
+                result = previous
+        write_json(output_path, result)
+        return result
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX validation and calibration research")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -117,6 +156,16 @@ def main() -> None:
         "--horizons",
         nargs="+",
         choices=[item.value for item in IdeaHorizon],
+    )
+    ablation = subparsers.add_parser(
+        "ablation",
+        help="run fixed market-context ablations on TRAIN/VALIDATION/OOS/WF",
+    )
+    ablation.add_argument("--tickers", nargs="+")
+    ablation.add_argument(
+        "--horizons",
+        nargs="+",
+        choices=[IdeaHorizon.POSITION_1M.value, IdeaHorizon.SWING_5D.value],
     )
     args = parser.parse_args()
 
@@ -155,6 +204,20 @@ def main() -> None:
                     "universe": result["universe"],
                     "horizons": list(result["oos_results"]["horizons"]),
                     "output_dir": get_settings().research_output_dir,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    elif args.command == "ablation":
+        result = asyncio.run(run_ablation(tickers=args.tickers, horizons=args.horizons))
+        print(
+            json.dumps(
+                {
+                    "dataset": result["dataset"],
+                    "horizons": list(result["horizons"]),
+                    "fundamental_coverage": result["fundamental_coverage"],
+                    "output": str(Path(get_settings().research_output_dir) / "ablation_oos.json"),
                 },
                 ensure_ascii=False,
                 indent=2,
