@@ -57,7 +57,7 @@ class MoexClient:
         api_token: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        headers = {"User-Agent": "moex-signal-bot/0.1"}
+        headers = {"User-Agent": "moex-signal-bot/0.2"}
         if api_token:
             headers["Authorization"] = f"Bearer {api_token}"
         self._client = httpx.AsyncClient(

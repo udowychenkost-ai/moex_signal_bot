@@ -4,6 +4,23 @@
 
 ### Added
 
+- LIVE OBSERVATION / FORWARD PAPER runtime with the fixed policy
+  `INTRADAY_1D=RESEARCH`, `SWING_5D=RESEARCH`, `POSITION_1M=PAPER`.
+- Independent ingestion, idea-scanning, lifecycle/paper, Telegram-dispatch and
+  daily-summary jobs inside the existing single APScheduler.
+- Data-freshness guard per ticker/timeframe and completed-candle filtering for
+  decision and lifecycle evaluation; stale MOEX data cannot create ideas.
+- Immutable one-to-one `TradingIdeaSnapshot` with decision price, factors,
+  technical/fundamental/news/total scores, strength, ATR, indicators and levels.
+- Event-level Telegram notifications for CREATED/ACTIVATED/TP/SL/EXPIRED/
+  INVALIDATED/CANCELLED with a persistent idempotent delivery outbox.
+- `/status`, `/stats`, `/ideas` and `/idea ID`, including small-sample warnings,
+  per-horizon modes and forward metrics for 7/30 days/all time.
+- Persisted scheduler diagnostics, startup recovery, daily Telegram summary,
+  Docker/PostgreSQL healthchecks and Ubuntu VPS runbook in `DEPLOY.md`.
+- Alembic revision `20260820_0008` for observation modes, snapshots, job state
+  and notification outbox.
+
 - Separate `TradingIdea` domain model, ORM schema and event history; an internal
   `Signal` is no longer exposed as a complete user trade setup.
 - Config-driven `INTRADAY_1D`, `SWING_5D` and `POSITION_1M` horizon profiles
@@ -15,7 +32,7 @@
   three-item main menu.
 - User preferences for report frequency, idea horizon, risk and minimum
   confidence.
-- Independent `market_scan` and `idea_reporting` jobs in one scheduler.
+- Independent market scan and idea reporting boundaries in one scheduler.
 - Per-user `(idea, version)` notification deduplication and material-change
   versioning.
 - Historical backtesting through the production `build_signal`,

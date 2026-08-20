@@ -1,17 +1,51 @@
 services:
-  moex-bot:
-    build: .
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/moex_bot.db}
+      POSTGRES_DB: ${POSTGRES_DB:-moex}
+      POSTGRES_USER: ${POSTGRES_USER:-moex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     volumes:
-      - moex_bot_data:/app/data
+      - moex_postgres:/var/lib/postgresql/data
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
+  app:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        APP_VERSION: ${APP_VERSION:-0.2.0}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+      APP_VERSION: ${APP_VERSION:-0.2.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 volumes:
-  moex_bot_data:
+  moex_postgres:

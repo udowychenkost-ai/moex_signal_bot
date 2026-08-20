@@ -200,6 +200,8 @@ class GeneratedSignal:
     atr: float | None = None
     support_levels: list[float] = field(default_factory=list)
     resistance_levels: list[float] = field(default_factory=list)
+    factor_scores: dict[str, float] = field(default_factory=dict)
+    relevant_indicators: dict[str, float | list[float] | None] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -238,6 +240,11 @@ class TradingIdeaData:
     fundamental_score: float = 0.0
     news_score: float = 0.0
     total_score: float = 0.0
+    observation_mode: str = "RESEARCH"
+    atr: float | None = None
+    factor_scores: dict[str, object] = field(default_factory=dict)
+    relevant_indicators: dict[str, object] = field(default_factory=dict)
+    regime: str | None = None
 
     @property
     def entry_state(self) -> EntryState:
@@ -267,3 +274,7 @@ class UnknownTickerError(ValueError):
 
 class InsufficientDataError(ValueError):
     """There are not enough candles to calculate a reliable signal."""
+
+
+class StaleMarketDataError(InsufficientDataError):
+    """Required decision-time candles are absent or older than the configured guard."""

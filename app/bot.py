@@ -16,8 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.domain import InsufficientDataError, MoexApiError, UnknownTickerError
+from app.forward import (
+    format_application_status,
+    format_idea_history,
+    format_open_ideas,
+    format_statistics,
+)
+from app.idea_repository import list_open_ideas
 from app.ingestion import IngestionService
 from app.models import TelegramUser
+from app.operations import OperationalService
 from app.paper import PaperTradingService, format_paper_summary
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
 from app.repositories import (
@@ -41,6 +49,7 @@ class BotServices:
     signals: SignalService
     reporting: ReportingService | None = None
     paper: PaperTradingService | None = None
+    operations: OperationalService | None = None
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -101,6 +110,25 @@ def _tokens(message: Message) -> list[str]:
     return (message.text or "").strip().split()
 
 
+async def _answer_long(message: Message, text: str, *, limit: int = 3_500) -> None:
+    """Split line-oriented HTML without cutting an individual tag in half."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+    for line in text.splitlines():
+        added = len(line) + (1 if current else 0)
+        if current and current_length + added > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_length = 0
+        current.append(line)
+        current_length += len(line) + (1 if current_length else 0)
+    if current:
+        chunks.append("\n".join(current))
+    for chunk in chunks:
+        await message.answer(chunk)
+
+
 async def _ensure_message_user(message: Message, services: BotServices) -> TelegramUser:
     if message.from_user is None:
         raise ValueError("Telegram user is missing")
@@ -127,7 +155,10 @@ def create_router(services: BotServices) -> Router:
             "Бот анализирует рынок независимо от частоты ваших отчётов.\n\n"
             "<b>Команды</b>\n"
             "/best — лучшие торговые идеи\n"
-            "/ideas — идеи по вашим фильтрам\n"
+            "/ideas — активные и ожидающие идеи\n"
+            "/idea ID — идея и полная lifecycle-история\n"
+            "/status — состояние приложения, MOEX и scheduler\n"
+            "/stats — forward-статистика за 7/30 дней и всё время\n"
             "/signal SBER [15m] — сигнал сейчас\n"
             "/watchlist add SBER — добавить тикер\n"
             "/watchlist remove SBER — удалить тикер\n"
@@ -158,7 +189,48 @@ def create_router(services: BotServices) -> Router:
     @router.message(Command("ideas"))
     @router.message(F.text == "📊 Мои идеи")
     async def my_ideas(message: Message) -> None:
-        await send_best_ideas(message)
+        await _ensure_message_user(message, services)
+        async with services.session_factory() as session:
+            ideas = await list_open_ideas(session, minimum_confidence=0, limit=100)
+        await message.answer(format_open_ideas(ideas))
+
+    @router.message(Command("idea"))
+    async def idea_command(message: Message) -> None:
+        await _ensure_message_user(message, services)
+        if services.operations is None:
+            await message.answer("Диагностический сервис недоступен.")
+            return
+        tokens = _tokens(message)
+        if len(tokens) != 2 or not tokens[1].isdigit():
+            await message.answer("Формат: <code>/idea 123</code>")
+            return
+        history = await services.operations.idea_history(int(tokens[1]))
+        if history is None:
+            await message.answer("Идея не найдена.")
+            return
+        await _answer_long(
+            message,
+            format_idea_history(history, timezone=services.settings.scheduler_timezone),
+        )
+
+    @router.message(Command("status"))
+    async def application_status(message: Message) -> None:
+        await _ensure_message_user(message, services)
+        if services.operations is None:
+            await message.answer("Диагностический сервис недоступен.")
+            return
+        status = await services.operations.status()
+        await message.answer(
+            format_application_status(status, timezone=services.settings.scheduler_timezone)
+        )
+
+    @router.message(Command("stats"))
+    async def forward_stats(message: Message) -> None:
+        await _ensure_message_user(message, services)
+        if services.operations is None:
+            await message.answer("Диагностический сервис недоступен.")
+            return
+        await message.answer(format_statistics(await services.operations.statistics()))
 
     @router.callback_query(F.data.startswith("idea:"))
     async def idea_details(callback: CallbackQuery) -> None:
@@ -170,11 +242,24 @@ def create_router(services: BotServices) -> Router:
         except ValueError:
             await callback.answer("Некорректный идентификатор", show_alert=True)
             return
-        idea = await services.reporting.idea_details(idea_id)
-        if idea is None or callback.message is None:
+        if callback.message is None:
             await callback.answer("Идея не найдена", show_alert=True)
             return
-        await callback.message.answer(format_idea_details(idea))
+        if services.operations is not None:
+            history = await services.operations.idea_history(idea_id)
+            if history is None:
+                await callback.answer("Идея не найдена", show_alert=True)
+                return
+            await _answer_long(
+                callback.message,
+                format_idea_history(history, timezone=services.settings.scheduler_timezone),
+            )
+        else:
+            idea = await services.reporting.idea_details(idea_id)
+            if idea is None:
+                await callback.answer("Идея не найдена", show_alert=True)
+                return
+            await callback.message.answer(format_idea_details(idea))
         await callback.answer()
 
     @router.message(Command("signal"))

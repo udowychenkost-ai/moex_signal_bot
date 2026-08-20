@@ -25,13 +25,18 @@
 - Telegram-меню «Лучшие идеи / Мои идеи / Настройки», компактная карточка и
   отдельная кнопка «Подробнее»;
 - пользовательские фильтры: частота, горизонт, риск и минимальный confidence;
-- один APScheduler с независимыми задачами market scanning и reporting;
-- version-based deduplication уведомлений без повтора неизменившейся идеи;
+- один APScheduler с независимыми ingestion, scanning, lifecycle, reporting и
+  daily-summary jobs;
+- event-outbox deduplication: новая идея и каждый lifecycle-переход доставляются
+  не более одного раза на Telegram chat;
+- data-freshness guard и работа только по завершённым decision/lifecycle свечам;
+- неизменяемый decision-time snapshot факторов, индикаторов, ATR и уровней;
 - historical backtest на том же signal/idea/risk/lifecycle pipeline;
 - leakage-safe research pipeline с TRAIN/VALIDATION/OOS, walk-forward,
   legacy/weighted comparison и простыми benchmark-стратегиями;
 - forward paper trading только по реально активированным `TradingIdea`;
 - Alembic-миграции с автоматическим обновлением распознанной старой схемы.
+- эксплуатационные `/status`, `/stats`, `/ideas`, `/idea ID` и startup recovery.
 
 Fundamental/news/sector scores не загружаются из внешних источников и не входят в
 текущую validation-фазу. Поля и веса для них предусмотрены, а при отсутствии
@@ -63,6 +68,14 @@ Historical candles → тот же Signal/TradingIdea/Risk/Tracker pipeline → 
 | `INTRADAY_1D` | 5m 15%, 15m 35%, 1h 30%, 4h 15%, 1d 5% | 15m | 1 день |
 | `SWING_5D` | 1h 25%, 4h 35%, 1d 30%, 1w 10% | 4h | 5 дней |
 | `POSITION_1M` | 4h 10%, 1d 55%, 1w 35% | 1d | 30 дней |
+
+LIVE OBSERVATION policy зафиксирована отдельно от стратегии:
+
+| Горизонт | Режим | Учёт результата |
+|---|---|---|
+| `INTRADAY_1D` | `RESEARCH` | lifecycle и R, без paper P&L |
+| `SWING_5D` | `RESEARCH` | lifecycle и R, без paper P&L |
+| `POSITION_1M` | `PAPER` | lot-aware simulated P&L с costs |
 
 Это профили одного движка, а не три стратегии. Новый горизонт добавляется через
 `HorizonProfile` без дублирования analysis/scoring/risk-кода.
@@ -108,6 +121,9 @@ python -m app.research run
 ```text
 /best
 /ideas
+/idea 123
+/status
+/stats
 /portfolio
 /signal SBER 15m
 /watchlist add SBER
@@ -120,10 +136,11 @@ python -m app.research run
 /settings confidence 70
 ```
 
-Пользовательская частота влияет только на доставку. Рыночный скан стартует
-асинхронно сразу после запуска и затем выполняется по будням каждые
-`INGESTION_INTERVAL_MINUTES` в торговое время. Отчётная задача проверяет
-персональные фильтры отдельно каждые 5 минут.
+Ingestion, scanning, lifecycle/paper и Telegram dispatch запускаются независимо.
+При недоступном MOEX старые свечи могут оставаться в БД, но freshness guard не
+даёт создать из них новую `TradingIdea`; `/status` показывает stale timeframes.
+После рестарта tracker продолжает все сохранённые pending/active идеи, а
+notification outbox не отправляет уже доставленные события повторно.
 
 ## Scoring и риск
 
@@ -184,7 +201,7 @@ walk-forward находятся в
 mark-to-market.
 
 `/portfolio` показывает общий forward paper account. Позиция создаётся только
-после реальной активации опубликованной идеи и закрывается по тому же lifecycle,
+для `POSITION_1M=PAPER` после активации опубликованной идеи и закрывается по тому же lifecycle,
 сохраняя reference/fill prices, gross P&L, commission, slippage, net P&L и
 R-multiple. В проекте нет broker execution adapter: paper-контур не может
 разместить реальную заявку.
@@ -205,19 +222,21 @@ ENABLE_ORDERBOOK=true
 
 ```powershell
 Copy-Item .env.example .env
-# заполните TELEGRAM_BOT_TOKEN
+# заполните Telegram и PostgreSQL secrets
+$env:GIT_COMMIT = git rev-parse --short HEAD
 docker compose up --build -d
-docker compose logs -f moex-bot
+docker compose logs -f app
 ```
 
-Контейнер работает не от root, схема обновляется при запуске, SQLite хранится в
-именованном volume. Для PostgreSQL задайте async DSN:
+Контейнер работает не от root; PostgreSQL хранится в persistent named volume,
+имеет healthcheck, а Alembic обновляет схему до запуска polling. Полная инструкция
+для Ubuntu VPS, update/redeploy и backup/restore: [`DEPLOY.md`](DEPLOY.md).
 
 ```env
 DATABASE_URL=postgresql+asyncpg://moex:secret@postgres:5432/moex
 ```
 
-Для forward-paper staging с PostgreSQL используйте `.env.staging.example` и
+Для дополнительного staging-контура используйте `.env.staging.example` и
 `docker-compose.staging.yml`. Пошаговая приёмка описана в
 [`docs/STAGING_CHECKLIST.md`](docs/STAGING_CHECKLIST.md). Если Docker CLI или
 PostgreSQL на рабочей машине отсутствуют, runtime-проверка остаётся внешним

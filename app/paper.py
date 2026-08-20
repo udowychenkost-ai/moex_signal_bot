@@ -57,6 +57,8 @@ class PaperTradingService:
                 return None
             trade = await session.scalar(select(PaperTrade).where(PaperTrade.idea_id == idea.id))
             if trade is None:
+                if idea.observation_mode != "PAPER":
+                    return None
                 instrument = await session.get(Instrument, idea.ticker)
                 equity = await self._equity(session)
                 entry_side = idea.direction

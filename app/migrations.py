@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260819_0007"
+HEAD_REVISION = "20260820_0008"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -85,12 +85,16 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
     columns = snapshot.idea_columns
     factor_columns = {"technical_score", "fundamental_score", "news_score", "total_score"}
     execution_columns = {"entry_fill_price", "exit_fill_price", "slippage"}
+    if {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(
+        snapshot.tables
+    ) and "observation_mode" in columns:
+        return HEAD_REVISION
     if (
         "paper_trades" in snapshot.tables
         and factor_columns.issubset(columns)
         and execution_columns.issubset(snapshot.paper_columns)
     ):
-        return HEAD_REVISION
+        return "20260819_0007"
     if "paper_trades" in snapshot.tables and factor_columns.issubset(columns):
         return "20260819_0006"
     if "paper_trades" in snapshot.tables:

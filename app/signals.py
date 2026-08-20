@@ -12,8 +12,35 @@ from app.domain import (
     UnknownTickerError,
 )
 from app.models import SignalRecord
+from app.observation import completed_candles
 from app.repositories import get_active_instrument, get_candles
 from app.risk import atr_risk_levels, level_risk_levels
+
+
+def _technical_snapshot(result: TechnicalResult) -> dict[str, float | list[float] | None]:
+    return {
+        "rsi": result.rsi,
+        "macd": result.macd,
+        "macd_signal": result.macd_signal,
+        "macd_histogram": result.macd_histogram,
+        "atr": result.atr,
+        "ema20": result.ema20,
+        "ema50": result.ema50,
+        "sma20": result.sma20,
+        "sma50": result.sma50,
+        "sma200": result.sma200,
+        "adx": result.adx,
+        "stochastic_k": result.stochastic_k,
+        "stochastic_d": result.stochastic_d,
+        "cci": result.cci,
+        "bb_high": result.bb_high,
+        "bb_low": result.bb_low,
+        "bb_percent": result.bb_percent,
+        "obv": result.obv,
+        "volume_ratio": result.volume_ratio,
+        "support_levels": result.support_levels,
+        "resistance_levels": result.resistance_levels,
+    }
 
 
 def analyze_signal_technical(
@@ -95,6 +122,8 @@ def build_signal(
         atr=technical.atr,
         support_levels=technical.support_levels,
         resistance_levels=technical.resistance_levels,
+        factor_scores=technical.component_scores,
+        relevant_indicators=_technical_snapshot(technical),
     )
 
 
@@ -121,6 +150,7 @@ class SignalService:
             if instrument is None:
                 raise UnknownTickerError(f"Неизвестный тикер {secid}")
             candles = await get_candles(session, secid, timeframe, limit=500)
+        candles = completed_candles(candles, timeframe)
         generated = build_signal(
             self.settings,
             secid,

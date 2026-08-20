@@ -157,6 +157,7 @@ class TradingIdea(Base):
     fundamental_score: Mapped[float] = mapped_column(Float, default=0)
     news_score: Mapped[float] = mapped_column(Float, default=0)
     total_score: Mapped[float] = mapped_column(Float, default=0)
+    observation_mode: Mapped[str] = mapped_column(String(16), default="RESEARCH", index=True)
     expected_return_pct: Mapped[float] = mapped_column(Float)
     risk_pct: Mapped[float] = mapped_column(Float)
     risk_reward_ratio: Mapped[float] = mapped_column(Float)
@@ -199,6 +200,34 @@ class TradingIdeaEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class TradingIdeaSnapshot(Base):
+    """Immutable decision-time evidence. Application code only inserts this row."""
+
+    __tablename__ = "trading_idea_snapshots"
+
+    idea_id: Mapped[int] = mapped_column(
+        ForeignKey("trading_ideas.id", ondelete="CASCADE"), primary_key=True
+    )
+    decision_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ticker: Mapped[str] = mapped_column(String(36), index=True)
+    horizon: Mapped[str] = mapped_column(String(16), index=True)
+    observation_mode: Mapped[str] = mapped_column(String(16))
+    price: Mapped[float] = mapped_column(Float)
+    factor_scores: Mapped[str] = mapped_column(Text, default="{}")
+    technical_score: Mapped[float] = mapped_column(Float)
+    fundamental_score: Mapped[float] = mapped_column(Float, default=0)
+    news_score: Mapped[float] = mapped_column(Float, default=0)
+    total_score: Mapped[float] = mapped_column(Float)
+    signal_strength: Mapped[float] = mapped_column(Float)
+    entry_price_from: Mapped[float] = mapped_column(Float)
+    entry_price_to: Mapped[float] = mapped_column(Float)
+    take_profit: Mapped[float] = mapped_column(Float)
+    stop_loss: Mapped[float] = mapped_column(Float)
+    atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    relevant_indicators: Mapped[str] = mapped_column(Text, default="{}")
+    regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
 class IdeaNotification(Base):
     __tablename__ = "idea_notifications"
     __table_args__ = (
@@ -216,6 +245,38 @@ class IdeaNotification(Base):
     )
     idea_version: Mapped[int] = mapped_column(Integer)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ForwardNotification(Base):
+    __tablename__ = "forward_notifications"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", "notification_key", name="uq_forward_notification"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    notification_key: Mapped[str] = mapped_column(String(128))
+    notification_type: Mapped[str] = mapped_column(String(32))
+    idea_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_ideas.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_idea_events.id", ondelete="CASCADE"), nullable=True
+    )
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class JobRunState(Base):
+    __tablename__ = "job_run_states"
+
+    job_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    details: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class PaperTrade(Base):

@@ -17,6 +17,7 @@ from app.domain import (
 )
 from app.horizons import get_horizon_profile
 from app.idea_repository import IdeaUpsertResult, create_or_update_idea
+from app.observation import DataFreshnessGuard
 from app.repositories import get_active_instrument
 from app.risk import atr_risk_levels, level_risk_levels
 from app.signals import SignalService
@@ -186,12 +187,13 @@ def build_trading_idea(
         already_invalid = current_price <= risk.take_profit or current_price >= risk.stop_loss
 
     timestamp = now or datetime.now(UTC)
-    in_zone = entry_from <= current_price <= entry_to
-    status = (
-        IdeaStatus.INVALIDATED
-        if already_invalid
-        else (IdeaStatus.ACTIVE if in_zone else IdeaStatus.PENDING_ENTRY)
-    )
+    # Every forward idea starts pending. The formation candle cannot also prove
+    # activation; only a later completed primary candle may touch the frozen zone.
+    status = IdeaStatus.INVALIDATED if already_invalid else IdeaStatus.PENDING_ENTRY
+    factor_scores = {timeframe: by_timeframe[timeframe].factor_scores for timeframe in available}
+    relevant_indicators = {
+        timeframe: by_timeframe[timeframe].relevant_indicators for timeframe in available
+    }
     return TradingIdeaData(
         ticker=primary.secid,
         instrument_name=instrument_name,
@@ -211,8 +213,8 @@ def build_trading_idea(
         invalidation_reason=invalidation,
         status=status,
         created_at=timestamp,
-        activated_at=timestamp if status == IdeaStatus.ACTIVE else None,
-        activation_price=current_price if status == IdeaStatus.ACTIVE else None,
+        activated_at=None,
+        activation_price=None,
         expires_at=timestamp + selected_profile.default_expiry,
         source_signal_id=primary.record_id,
         source_timeframes=list(available),
@@ -221,6 +223,10 @@ def build_trading_idea(
         fundamental_score=round(fundamental_score or 0.0, 4),
         news_score=round(news_score or 0.0, 4),
         total_score=round(total_score, 4),
+        observation_mode=settings.observation_mode(horizon),
+        atr=primary.atr,
+        factor_scores=factor_scores,
+        relevant_indicators=relevant_indicators,
     )
 
 
@@ -230,10 +236,12 @@ class TradingIdeaGenerator:
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
         signals: SignalService,
+        freshness: DataFreshnessGuard | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.signals = signals
+        self.freshness = freshness
 
     async def generate(
         self,
@@ -242,6 +250,8 @@ class TradingIdeaGenerator:
     ) -> IdeaUpsertResult | None:
         ticker = ticker.upper()
         profile = get_horizon_profile(horizon)
+        if self.freshness is not None:
+            await self.freshness.require_fresh(ticker, horizon)
         async with self.session_factory() as session:
             instrument = await get_active_instrument(session, ticker)
         if instrument is None:

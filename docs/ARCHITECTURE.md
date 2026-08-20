@@ -29,7 +29,9 @@ Analysis Engine → Scoring Engine → SignalService
                          IdeaTracker
                          │         │
                          ▼         ▼
-                    PaperTrade  ReportingService → Telegram
+            POSITION-only Paper  Forward outbox → Telegram
+                                      │
+                         status / stats / daily summary
 ```
 
 Backtest получает historical candles из того же repository layer и вызывает те
@@ -49,13 +51,16 @@ Backtest получает historical candles из того же repository layer
 | `app/idea_repository.py` | Единственность открытой идеи, material updates, version/dedup events | Анализ рынка |
 | `app/idea_tracker.py` | Активация, TP/SL, expiry, missed entry | Генерацию новой идеи |
 | `app/reporting.py` | Фильтры пользователя, формат, расписание доставки, notification dedup | Market scan |
-| `app/paper.py` | Forward P&L по активированным persisted ideas | Альтернативную торговую стратегию |
+| `app/forward.py` | Event notifications, `/status` formatting, stats and daily summary | Рыночный анализ |
+| `app/observation.py` | Closed-candle and freshness guards | Scoring |
+| `app/operations.py` | Job state, health, forward metrics and lifecycle details | Scheduler triggers |
+| `app/paper.py` | Forward P&L только по активированным `POSITION_1M=PAPER` | Broker execution |
 | `app/backtest.py` | Историческая оркестрация общего production pipeline и метрики | Отдельные правила сигналов |
 | `app/research_data.py` | Отдельный universe, incremental dataset и coverage metadata | Production universe |
 | `app/research_runner.py` | TRAIN/VALIDATION/OOS, calibration и walk-forward orchestration | Изменение production defaults |
 | `app/research_baselines.py` | Research-only buy-and-hold/EMA/RSI benchmarks | Production signals |
-| `app/scanner.py` | Один рыночный цикл: ingestion → tracking → ideas → paper | Telegram frequency |
-| `app/scheduler.py` | Две задачи в одном scheduler | Бизнес-логику задач |
+| `app/scanner.py` | Раздельные ingestion, tracking, idea and paper operations | Telegram frequency |
+| `app/scheduler.py` | Пять независимых jobs в одном scheduler | Бизнес-логику задач |
 | `app/migrations.py` | Alembic upgrade и безопасное принятие распознанной legacy-схемы | Runtime `create_all` |
 
 ## Signal и TradingIdea
@@ -92,9 +97,12 @@ PENDING_ENTRY ──────────────────────
 - TP до входа означает `INVALIDATED`, а не прибыль;
 - если одна OHLC-свеча одновременно касается TP и SL, применяется консервативный
   SL-first порядок;
-- tracker обрабатывает только свечи новее `last_evaluated_at`;
+- tracker обрабатывает только завершённые свечи новее `last_evaluated_at`;
 - каждый переход сохраняется в `trading_idea_events`;
-- уведомление уникально для `(telegram_id, idea_id, idea_version)`.
+- новая идея всегда начинается `PENDING_ENTRY`, поэтому formation candle не
+  может одновременно доказать вход;
+- decision snapshot создаётся один раз и после reassessment не изменяется;
+- lifecycle notification уникально для `(telegram_id, event_id)`.
 
 ## Горизонты
 
@@ -107,8 +115,11 @@ factor weights, confidence floor, ATR multipliers, entry-zone width и expiry.
 
 Один `AsyncIOScheduler` содержит:
 
-1. `market_scan`: сразу после старта, затем каждые 5–15 минут по конфигурации;
-2. `idea_reporting`: каждые 5 минут проверяет, кому наступило время отправки.
+1. `market_ingestion`: MOEX universe и свечи;
+2. `idea_scanning`: freshness check и новые/изменённые идеи;
+3. `lifecycle_tracking`: активация/закрытие и POSITION paper P&L;
+4. `telegram_reporting`: независимая доставка новых событий;
+5. `daily_summary`: один вечерний forward report.
 
 Market scan не зависит от Telegram-настроек. Reporting не пересчитывает рынок и
 не создаёт слабую идею ради расписания. `max_instances=1` предотвращает

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.domain import CandleData, IdeaDirection, IdeaStatus, IdeaTransition
 from app.idea_repository import OPEN_IDEA_STATUSES, add_idea_event
 from app.models import Candle, TradingIdea
+from app.observation import completed_candles
 from app.repositories import get_candles_after
 
 
@@ -218,6 +219,11 @@ class IdeaTracker:
                     detached.primary_timeframe,
                     after,
                 )
+            candles = completed_candles(
+                candles,
+                detached.primary_timeframe,
+                now=current_time,
+            )
             transitions = await self.track_idea(detached.id, candles)
             counters["evaluated"] += len(candles)
             counters["transitions"] += len(transitions)

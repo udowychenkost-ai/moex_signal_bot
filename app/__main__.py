@@ -15,6 +15,7 @@ from app.bot import BotServices, create_router
 from app.config import get_settings
 from app.db import create_engine_and_session
 from app.domain import IdeaHorizon
+from app.forward import ForwardReportingService
 from app.horizons import get_horizon_profile
 from app.idea_tracker import IdeaTracker
 from app.ideas import TradingIdeaGenerator
@@ -22,6 +23,8 @@ from app.ingestion import IngestionService
 from app.logging_config import configure_logging
 from app.migrations import migrate_database
 from app.moex import MoexClient
+from app.observation import DataFreshnessGuard
+from app.operations import OperationalService
 from app.paper import PaperTradingService
 from app.reporting import ReportingService
 from app.repositories import get_active_instrument, get_candles
@@ -74,14 +77,26 @@ async def run_bot() -> None:
         ) as moex:
             ingestion = IngestionService(settings, session_factory, moex)
             signals = SignalService(settings, session_factory)
-            ideas = TradingIdeaGenerator(settings, session_factory, signals)
             tracker = IdeaTracker(session_factory)
+            freshness = DataFreshnessGuard(settings, session_factory)
+            ideas = TradingIdeaGenerator(
+                settings,
+                session_factory,
+                signals,
+                freshness=freshness,
+            )
             reporting = ReportingService(
                 session_factory,
                 timezone=settings.scheduler_timezone,
             )
             paper = PaperTradingService(settings, session_factory)
             scanner = MarketScanner(session_factory, ingestion, ideas, tracker, paper)
+            operations = OperationalService(settings, session_factory, freshness)
+            forward_reporting = ForwardReportingService(
+                settings,
+                session_factory,
+                operations,
+            )
             services = BotServices(
                 settings,
                 session_factory,
@@ -89,9 +104,18 @@ async def run_bot() -> None:
                 signals,
                 reporting,
                 paper,
+                operations,
             )
-            jobs = ScheduledJobs(settings, scanner, reporting, bot)
+            recovery_tracking = await tracker.track_all()
+            recovery_paper = await paper.sync_all()
+            logger.info(
+                "Startup recovery complete: lifecycle=%s paper=%s",
+                recovery_tracking,
+                recovery_paper,
+            )
+            jobs = ScheduledJobs(settings, scanner, forward_reporting, bot, operations)
             scheduler = build_scheduler(settings, jobs)
+            operations.attach_scheduler(scheduler)
             scheduler.start()
 
             dispatcher = Dispatcher()
@@ -145,11 +169,25 @@ async def migrate_once() -> None:
     logger.info("Database schema is at Alembic head")
 
 
+async def healthcheck_once() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    engine, session_factory = create_engine_and_session(settings.database_url)
+    try:
+        freshness = DataFreshnessGuard(settings, session_factory)
+        operations = OperationalService(settings, session_factory, freshness)
+        if not await operations.database_ok():
+            raise RuntimeError("Database healthcheck failed")
+        logger.info("Healthcheck passed")
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX signal bot")
     parser.add_argument(
         "command",
-        choices=("run", "ingest", "backtest", "migrate"),
+        choices=("run", "ingest", "backtest", "migrate", "healthcheck"),
         nargs="?",
         default="run",
     )
@@ -169,8 +207,10 @@ def main() -> None:
         if not args.ticker:
             parser.error("backtest requires TICKER")
         asyncio.run(run_backtest(args.ticker, args.horizon))
-    else:
+    elif args.command == "migrate":
         asyncio.run(migrate_once())
+    else:
+        asyncio.run(healthcheck_once())
 
 
 if __name__ == "__main__":

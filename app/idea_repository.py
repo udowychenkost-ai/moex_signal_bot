@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -7,7 +8,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import IdeaDirection, IdeaStatus, TradingIdeaData
-from app.models import IdeaNotification, TradingIdea, TradingIdeaEvent
+from app.models import IdeaNotification, TradingIdea, TradingIdeaEvent, TradingIdeaSnapshot
 
 OPEN_IDEA_STATUSES = (IdeaStatus.PENDING_ENTRY.value, IdeaStatus.ACTIVE.value)
 
@@ -36,6 +37,7 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
         "fundamental_score": data.fundamental_score,
         "news_score": data.news_score,
         "total_score": data.total_score,
+        "observation_mode": data.observation_mode,
         "expected_return_pct": data.expected_return_pct,
         "risk_pct": data.risk_pct,
         "risk_reward_ratio": data.risk_reward_ratio,
@@ -182,6 +184,39 @@ async def create_or_update_idea(
         idea = TradingIdea(**_model_values(data, material_hash))
         session.add(idea)
         await session.flush()
+        session.add(
+            TradingIdeaSnapshot(
+                idea_id=idea.id,
+                decision_at=data.created_at,
+                ticker=data.ticker.upper(),
+                horizon=data.horizon.value,
+                observation_mode=data.observation_mode,
+                price=data.current_price,
+                factor_scores=json.dumps(
+                    data.factor_scores,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                ),
+                technical_score=data.technical_score,
+                fundamental_score=data.fundamental_score,
+                news_score=data.news_score,
+                total_score=data.total_score,
+                signal_strength=data.confidence,
+                entry_price_from=data.entry_price_from,
+                entry_price_to=data.entry_price_to,
+                take_profit=data.take_profit,
+                stop_loss=data.stop_loss,
+                atr=data.atr,
+                relevant_indicators=json.dumps(
+                    data.relevant_indicators,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                ),
+                regime=data.regime,
+            )
+        )
         add_idea_event(
             session,
             idea,

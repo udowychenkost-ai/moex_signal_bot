@@ -164,9 +164,12 @@ async def test_tracker_persists_activation_once_and_advances_progress() -> None:
         await upsert_candles(session, [market_candle])
 
     tracker = IdeaTracker(factory)
-    first = await tracker.track_all(now=next_begin)
-    second = await tracker.track_all(now=next_begin)
+    forming = await tracker.track_all(now=next_begin + timedelta(minutes=5))
+    first = await tracker.track_all(now=next_begin + timedelta(minutes=15))
+    second = await tracker.track_all(now=next_begin + timedelta(minutes=15))
 
+    assert forming["transitions"] == 0
+    assert forming["evaluated"] == 0
     assert first["transitions"] == 1
     assert second["transitions"] == 0
     assert second["evaluated"] == 0

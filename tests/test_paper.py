@@ -27,7 +27,7 @@ async def test_paper_trade_follows_published_idea_lifecycle_idempotently() -> No
             [InstrumentData("SBER", "TQBR", "Сбербанк", lot_size=10)],
         )
     candidate = build_trading_idea(
-        Settings(_env_file=None),
+        Settings(_env_file=None, intraday_observation_mode="PAPER"),
         instrument_name="Сбербанк",
         horizon=IdeaHorizon.INTRADAY_1D,
         signals=[signal("15m", 60), signal("1h", 60), signal("1d", 60)],

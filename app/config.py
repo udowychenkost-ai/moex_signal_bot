@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain import IdeaHorizon
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -29,7 +31,20 @@ class Settings(BaseSettings):
     timeframes: str = "15m,1h,1d"
     default_timeframe: str = "15m"
     ingestion_interval_minutes: int = Field(default=15, ge=1, le=59)
+    scanning_interval_minutes: int = Field(default=15, ge=1, le=59)
+    lifecycle_interval_minutes: int = Field(default=5, ge=1, le=59)
+    reporting_interval_minutes: int = Field(default=1, ge=1, le=59)
+    daily_summary_hour: int = Field(default=19, ge=0, le=23)
+    daily_summary_minute: int = Field(default=15, ge=0, le=59)
     scheduler_timezone: str = "Europe/Moscow"
+    data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
+    small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
+    telegram_admin_chat_ids: str = ""
+    app_version: str = "0.2.0"
+    git_commit: str = "unknown"
+    intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
+    swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
+    position_observation_mode: Literal["RESEARCH", "PAPER"] = "PAPER"
 
     blue_chip_tickers: str = (
         "SBER,GAZP,LKOH,YDEX,NVTK,GMKN,TATN,ROSN,PLZL,MOEX,"
@@ -113,6 +128,43 @@ class Settings(BaseSettings):
         if total <= 0:
             raise ValueError("At least one technical score weight must be positive")
         return {name: weight / total * 100 for name, weight in weights.items()}
+
+    @property
+    def freshness_limits(self) -> dict[str, int]:
+        allowed = {"5m", "15m", "1h", "4h", "1d", "1w"}
+        values: dict[str, int] = {}
+        for raw_item in self.data_freshness_limits_minutes.split(","):
+            timeframe, separator, raw_minutes = raw_item.strip().partition(":")
+            if not separator or timeframe not in allowed:
+                raise ValueError(
+                    "DATA_FRESHNESS_LIMITS_MINUTES must contain timeframe:minutes pairs"
+                )
+            minutes = int(raw_minutes)
+            if minutes <= 0:
+                raise ValueError("Freshness limits must be positive")
+            values[timeframe] = minutes
+        missing = allowed - values.keys()
+        if missing:
+            raise ValueError(f"Missing freshness limits: {', '.join(sorted(missing))}")
+        return values
+
+    @property
+    def admin_chat_ids(self) -> list[int]:
+        return list(
+            dict.fromkeys(
+                int(item.strip())
+                for item in self.telegram_admin_chat_ids.split(",")
+                if item.strip()
+            )
+        )
+
+    def observation_mode(self, horizon: IdeaHorizon | str) -> str:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_observation_mode,
+            IdeaHorizon.SWING_5D: self.swing_observation_mode,
+            IdeaHorizon.POSITION_1M: self.position_observation_mode,
+        }[selected]
 
 
 @lru_cache
