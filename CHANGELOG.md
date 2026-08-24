@@ -31,7 +31,9 @@
   payloads.
 - PostgreSQL-backed, per-user idempotent watch/follow state, pagination for
   watchlist/signal history/open ideas/results, callback authorization and safe
-  handling of missing, deleted or no-longer-actionable objects.
+  handling of missing, deleted or no-longer-actionable objects. Subscription
+  timestamps prioritize only future watched/followed events and prevent stale
+  lifecycle replay.
 - Alembic revision `20260824_0012`; additive `idea_follows` and
   `notify_watchlist` state with migration coverage from the previous V2 head.
 - Leakage-safe `app.research quality-v2` comparison: confirmation selection on

@@ -27,7 +27,14 @@ from app.experiments import (
 from app.forward import ForwardReportingService
 from app.idea_repository import create_or_update_idea
 from app.ideas import build_trading_idea, idea_material_hash
-from app.models import AIRequestLog, CandidateExperiment, TelegramUser
+from app.models import (
+    AIRequestLog,
+    CandidateExperiment,
+    IdeaFollow,
+    TelegramUser,
+    TradingIdeaEvent,
+    WatchlistItem,
+)
 from app.observation import DataFreshnessGuard
 from app.operations import OperationalService
 from app.quality import QualityGate, apply_quality_result
@@ -670,6 +677,101 @@ async def test_notification_preferences_suppress_disabled_event_type() -> None:
 
     assert result["sent"] == 0
     assert bot.messages == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("watch_notifications", "expected_sent"), ((True, 1), (False, 0)))
+async def test_watch_notifications_apply_only_when_enabled(
+    watch_notifications: bool,
+    expected_sent: int,
+) -> None:
+    engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    settings = Settings(_env_file=None)
+    quant = candidate()
+    async with factory() as session, session.begin():
+        await upsert_instruments(
+            session, [InstrumentData("SBER", "TQBR", "Сбербанк", daily_turnover=1e9)]
+        )
+        user = await ensure_user(session, 77, "owner", "15m", 1, "strong", "all", 60)
+        user.created_at = NOW - timedelta(minutes=2)
+        user.notify_new_idea = False
+        user.notify_watchlist = watch_notifications
+        session.add(
+            WatchlistItem(
+                telegram_id=user.telegram_id,
+                secid="SBER",
+                created_at=NOW - timedelta(minutes=1),
+            )
+        )
+        await create_or_update_idea(
+            session,
+            quant,
+            material_hash=idea_material_hash(quant),
+            confidence_delta=7.5,
+        )
+    operations = OperationalService(settings, factory, DataFreshnessGuard(settings, factory))
+    reporting = ForwardReportingService(settings, factory, operations)
+    bot = RecordingBot()
+
+    result = await reporting.dispatch_notifications(bot, now=NOW)
+
+    assert result["sent"] == expected_sent
+    assert len(bot.messages) == expected_sent
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_follow_subscription_delivers_only_future_lifecycle_event() -> None:
+    engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    settings = Settings(_env_file=None)
+    quant = candidate()
+    async with factory() as session, session.begin():
+        await upsert_instruments(
+            session, [InstrumentData("SBER", "TQBR", "Сбербанк", daily_turnover=1e9)]
+        )
+        user = await ensure_user(session, 77, "owner", "15m", 1, "strong", "all", 60)
+        user.created_at = NOW - timedelta(minutes=1)
+        user.notify_new_idea = False
+        user.notify_activation = False
+        created = await create_or_update_idea(
+            session,
+            quant,
+            material_hash=idea_material_hash(quant),
+            confidence_delta=7.5,
+        )
+        created.idea.status = "ACTIVE"
+        created.idea.activated_at = NOW + timedelta(minutes=2)
+        created.idea.activation_price = created.idea.entry_price_from
+        session.add(
+            IdeaFollow(
+                telegram_id=user.telegram_id,
+                idea_id=created.idea.id,
+                created_at=NOW + timedelta(minutes=1),
+            )
+        )
+        session.add(
+            TradingIdeaEvent(
+                idea_id=created.idea.id,
+                event_type="ACTIVATED",
+                from_status="PENDING_ENTRY",
+                to_status="ACTIVE",
+                price=created.idea.activation_price,
+                details="entry zone reached",
+                occurred_at=NOW + timedelta(minutes=2),
+            )
+        )
+    operations = OperationalService(settings, factory, DataFreshnessGuard(settings, factory))
+    reporting = ForwardReportingService(settings, factory, operations)
+    bot = RecordingBot()
+
+    result = await reporting.dispatch_notifications(bot, now=NOW + timedelta(minutes=3))
+
+    assert result["sent"] == 1
+    assert len(bot.messages) == 1
+    assert "IDEA ACTIVATED" in bot.messages[0][1]
     await engine.dispose()
 
 

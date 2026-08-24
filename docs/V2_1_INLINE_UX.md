@@ -65,6 +65,11 @@ Paginated watchlist:
   still be removed.
 - Watch/follow settings live in PostgreSQL and therefore survive application and
   container restarts. No state is trusted from the old message markup.
+- With watch notifications enabled, future events for watched tickers take
+  priority over generic event/horizon/strength preferences. Following an idea
+  does the same for its future lifecycle events. Subscription timestamps prevent
+  old skipped events from being replayed; the user's AI safety filter remains
+  authoritative.
 - Text/markup is edited in place where Telegram permits it. New ideas and
   lifecycle events stay separate notifications. Home sends one small message so
   Telegram can restore the persistent Reply Keyboard, which cannot be attached

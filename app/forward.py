@@ -505,16 +505,18 @@ class ForwardReportingService:
                         )
                     )
                 )
-                watched_tickers = set(
-                    await session.scalars(
-                        select(WatchlistItem.secid).where(WatchlistItem.telegram_id == telegram_id)
+                watched_since = {
+                    item.secid: item.created_at
+                    for item in await session.scalars(
+                        select(WatchlistItem).where(WatchlistItem.telegram_id == telegram_id)
                     )
-                )
-                followed_ideas = set(
-                    await session.scalars(
-                        select(IdeaFollow.idea_id).where(IdeaFollow.telegram_id == telegram_id)
+                }
+                followed_since = {
+                    item.idea_id: item.created_at
+                    for item in await session.scalars(
+                        select(IdeaFollow).where(IdeaFollow.telegram_id == telegram_id)
                     )
-                )
+                }
             for event in events:
                 key = f"event:{event.id}"
                 if key in sent_keys:
@@ -525,6 +527,24 @@ class ForwardReportingService:
                 idea = ideas.get(event.idea_id)
                 if idea is None:
                     continue
+                event_at = aware_utc(event.occurred_at)
+                watch_started_at = watched_since.get(idea.ticker)
+                follow_started_at = followed_since.get(idea.id)
+                contextual_subscription = bool(
+                    user is not None
+                    and (
+                        (
+                            user.notify_watchlist
+                            and watch_started_at is not None
+                            and event_at >= aware_utc(watch_started_at)
+                        )
+                        or (
+                            event.event_type != "CREATED"
+                            and follow_started_at is not None
+                            and event_at >= aware_utc(follow_started_at)
+                        )
+                    )
+                )
                 if user is not None:
                     preference = {
                         "CREATED": user.notify_new_idea,
@@ -535,7 +555,7 @@ class ForwardReportingService:
                         "ENTRY_MISSED": user.notify_expiry,
                         "INVALIDATED": user.notify_expiry,
                     }.get(event.event_type, True)
-                    if not preference:
+                    if not preference and not contextual_subscription:
                         continue
                     if (
                         user.ai_filter_enabled
@@ -543,14 +563,18 @@ class ForwardReportingService:
                         and idea.ai_verdict not in {"STRONG_APPROVE", "APPROVE"}
                     ):
                         continue
-                    if user.idea_horizon != "all" and user.idea_horizon != idea.horizon:
+                    if (
+                        not contextual_subscription
+                        and user.idea_horizon != "all"
+                        and user.idea_horizon != idea.horizon
+                    ):
                         continue
                     strength = (
                         idea.final_quality_score
                         if idea.strategy_version == self.settings.strategy_version
                         else idea.confidence
                     )
-                    if strength < user.minimum_confidence:
+                    if not contextual_subscription and strength < user.minimum_confidence:
                         continue
                 message = (
                     format_new_idea(idea, timezone=self.settings.scheduler_timezone)
@@ -572,8 +596,8 @@ class ForwardReportingService:
                 keyboard = (
                     idea_context_keyboard(
                         idea,
-                        watched=idea.ticker in watched_tickers,
-                        followed=idea.id in followed_ideas,
+                        watched=idea.ticker in watched_since,
+                        followed=idea.id in followed_since,
                     )
                     if event.event_type == "CREATED"
                     else lifecycle_context_keyboard(idea, closed=closed)
