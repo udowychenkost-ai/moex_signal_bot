@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,10 +17,12 @@ from app.domain import IdeaHorizon, IdeaStatus
 from app.idea_repository import OPEN_IDEA_STATUSES
 from app.models import (
     ForwardNotification,
+    IdeaFollow,
     PaperTrade,
     TelegramUser,
     TradingIdea,
     TradingIdeaEvent,
+    WatchlistItem,
 )
 from app.observation import aware_utc
 from app.operations import (
@@ -31,6 +33,7 @@ from app.operations import (
     realized_r,
 )
 from app.reporting import HORIZON_LABELS
+from app.telegram_ui import idea_context_keyboard, lifecycle_context_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -56,34 +59,18 @@ EVENT_TITLES = {
 }
 
 
-def _idea_actions(idea_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🧠 AI-анализ", callback_data=f"idea_ai:{idea_id}"),
-                InlineKeyboardButton(text="📊 Теханализ", callback_data=f"idea_tech:{idea_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="🏢 Фундаментал", callback_data=f"idea_fund:{idea_id}"),
-                InlineKeyboardButton(text="🌍 Рынок", callback_data=f"idea_market:{idea_id}"),
-            ],
-            [InlineKeyboardButton(text="📜 История идеи", callback_data=f"idea_history:{idea_id}")],
-        ]
-    )
-
-
 async def _send_bot_message(
     bot: Bot,
     chat_id: int,
     message: str,
     *,
-    idea_id: int | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    if idea_id is None:
+    if reply_markup is None:
         await bot.send_message(chat_id, message)
         return
     try:
-        await bot.send_message(chat_id, message, reply_markup=_idea_actions(idea_id))
+        await bot.send_message(chat_id, message, reply_markup=reply_markup)
     except TypeError as error:
         # Lightweight test/dummy bots may intentionally expose the old two-argument API.
         if "reply_markup" not in str(error):
@@ -518,6 +505,16 @@ class ForwardReportingService:
                         )
                     )
                 )
+                watched_tickers = set(
+                    await session.scalars(
+                        select(WatchlistItem.secid).where(WatchlistItem.telegram_id == telegram_id)
+                    )
+                )
+                followed_ideas = set(
+                    await session.scalars(
+                        select(IdeaFollow.idea_id).where(IdeaFollow.telegram_id == telegram_id)
+                    )
+                )
             for event in events:
                 key = f"event:{event.id}"
                 if key in sent_keys:
@@ -565,12 +562,28 @@ class ForwardReportingService:
                         timezone=self.settings.scheduler_timezone,
                     )
                 )
+                closed = event.to_status in {
+                    IdeaStatus.TP_HIT.value,
+                    IdeaStatus.SL_HIT.value,
+                    IdeaStatus.EXPIRED.value,
+                    IdeaStatus.INVALIDATED.value,
+                    IdeaStatus.CANCELLED.value,
+                }
+                keyboard = (
+                    idea_context_keyboard(
+                        idea,
+                        watched=idea.ticker in watched_tickers,
+                        followed=idea.id in followed_ideas,
+                    )
+                    if event.event_type == "CREATED"
+                    else lifecycle_context_keyboard(idea, closed=closed)
+                )
                 try:
                     await _send_bot_message(
                         bot,
                         telegram_id,
                         message,
-                        idea_id=idea.id if event.event_type == "CREATED" else None,
+                        reply_markup=keyboard,
                     )
                     await self._mark_sent(
                         telegram_id,

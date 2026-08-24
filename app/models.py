@@ -100,6 +100,7 @@ class TelegramUser(Base):
     notify_sl: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_expiry: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_daily_summary: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_watchlist: Mapped[bool] = mapped_column(Boolean, default=True)
     last_report_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -233,6 +234,21 @@ class TradingIdeaEvent(Base):
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
     details: Mapped[str] = mapped_column(Text, default="")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class IdeaFollow(Base):
+    __tablename__ = "idea_follows"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", "idea_id", name="uq_idea_follow_user_idea"),
+        Index("ix_idea_follows_idea", "idea_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(
+        ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"), index=True
+    )
+    idea_id: Mapped[int] = mapped_column(ForeignKey("trading_ideas.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class TradingIdeaSnapshot(Base):

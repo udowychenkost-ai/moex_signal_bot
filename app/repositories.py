@@ -16,6 +16,7 @@ from app.domain import (
 )
 from app.models import (
     Candle,
+    IdeaFollow,
     Instrument,
     MarketCandle,
     OrderBookLevel,
@@ -403,15 +404,13 @@ async def ensure_user(
 
 
 async def add_watchlist_item(session: AsyncSession, telegram_id: int, secid: str) -> bool:
-    exists = await session.scalar(
-        select(WatchlistItem.id).where(
-            WatchlistItem.telegram_id == telegram_id, WatchlistItem.secid == secid.upper()
-        )
-    )
-    if exists:
-        return False
-    session.add(WatchlistItem(telegram_id=telegram_id, secid=secid.upper()))
-    return True
+    statement = _upsert_statement(
+        session,
+        WatchlistItem,
+        [{"telegram_id": telegram_id, "secid": secid.upper()}],
+    ).on_conflict_do_nothing(index_elements=["telegram_id", "secid"])
+    result = await session.execute(statement)
+    return bool(result.rowcount)
 
 
 async def remove_watchlist_item(session: AsyncSession, telegram_id: int, secid: str) -> bool:
@@ -430,6 +429,38 @@ async def get_watchlist(session: AsyncSession, telegram_id: int) -> list[str]:
         .order_by(WatchlistItem.secid)
     )
     return list(result)
+
+
+async def is_watchlisted(session: AsyncSession, telegram_id: int, secid: str) -> bool:
+    return (
+        await session.scalar(
+            select(WatchlistItem.id).where(
+                WatchlistItem.telegram_id == telegram_id,
+                WatchlistItem.secid == secid.upper(),
+            )
+        )
+        is not None
+    )
+
+
+async def add_idea_follow(session: AsyncSession, telegram_id: int, idea_id: int) -> bool:
+    statement = _upsert_statement(
+        session,
+        IdeaFollow,
+        [{"telegram_id": telegram_id, "idea_id": idea_id}],
+    ).on_conflict_do_nothing(index_elements=["telegram_id", "idea_id"])
+    result = await session.execute(statement)
+    return bool(result.rowcount)
+
+
+async def remove_idea_follow(session: AsyncSession, telegram_id: int, idea_id: int) -> bool:
+    result = await session.execute(
+        delete(IdeaFollow).where(
+            IdeaFollow.telegram_id == telegram_id,
+            IdeaFollow.idea_id == idea_id,
+        )
+    )
+    return bool(result.rowcount)
 
 
 async def list_subscriptions(session: AsyncSession) -> list[tuple[int, str, str, float]]:
@@ -466,6 +497,7 @@ async def update_user_settings(
     notify_sl: bool | None = None,
     notify_expiry: bool | None = None,
     notify_daily_summary: bool | None = None,
+    notify_watchlist: bool | None = None,
 ) -> None:
     values: dict[str, object] = {}
     if timeframe is not None:
@@ -486,6 +518,7 @@ async def update_user_settings(
         ("notify_sl", notify_sl),
         ("notify_expiry", notify_expiry),
         ("notify_daily_summary", notify_daily_summary),
+        ("notify_watchlist", notify_watchlist),
     ):
         if value is not None:
             values[name] = value

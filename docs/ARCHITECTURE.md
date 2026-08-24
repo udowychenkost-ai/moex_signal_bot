@@ -64,6 +64,8 @@ Backtest получает historical candles из того же repository layer
 | `app/idea_tracker.py` | Активация, TP/SL, expiry, missed entry | Генерацию новой идеи |
 | `app/reporting.py` | Фильтры пользователя, формат, расписание доставки, notification dedup | Market scan |
 | `app/forward.py` | Event notifications, `/status` formatting, stats and daily summary | Рыночный анализ |
+| `app/telegram_context.py` | Авторизованные DB-backed watch/follow, object lookup и pagination | Форматирование Telegram-кнопок |
+| `app/telegram_ui.py` | Короткие callback IDs и контекстные inline keyboards | Доступ к БД и бизнес-решения |
 | `app/observation.py` | Closed-candle and freshness guards | Scoring |
 | `app/operations.py` | Job state, health, forward metrics and lifecycle details | Scheduler triggers |
 | `app/paper.py` | Forward P&L только по активированным `POSITION_1M=PAPER` | Broker execution |
@@ -131,6 +133,13 @@ PENDING_ENTRY ──────────────────────
   может одновременно доказать вход;
 - decision snapshot создаётся один раз и после reassessment не изменяется;
 - lifecycle notification уникально для `(telegram_id, event_id)`.
+- watchlist уникален для `(telegram_id, secid)`, follow — для
+  `(telegram_id, idea_id)`; explicit watch/unwatch и follow/unfollow остаются
+  идемпотентными при повторной доставке callback;
+- callback повторно проверяет активного Telegram user и существование объекта;
+  закрытую идею нельзя начать follow, но существующий follow можно снять;
+- callback_data содержит только action + stable ID/ticker и не превышает лимит
+  Telegram; пользовательские состояния и рыночные данные в payload не кладутся.
 
 ## Горизонты
 

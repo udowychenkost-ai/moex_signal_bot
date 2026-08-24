@@ -37,8 +37,9 @@
   LLM «спасать» REJECT; OpenAI сохранён как альтернативный provider;
 - frozen `candidate_experiments` для quant/AI approved/rejected cohorts и
   отдельный lifecycle фактического результата даже для неопубликованных идей;
-- Telegram-меню из шести разделов, button-only настройки, V2-карточка и экраны
-  AI/technical/fundamental/market/lifecycle;
+- Telegram-меню из шести разделов и V2.1 contextual inline UX: stateful
+  watch/follow actions, idea/instrument/lifecycle drill-down, quick actions and
+  pagination без удаления Reply Keyboard или slash-команд;
 - пользовательские фильтры: частота, горизонт, риск, сила, AI и типы уведомлений;
 - один APScheduler с независимыми ingestion, scanning, lifecycle, reporting и
   daily-summary jobs;
@@ -83,7 +84,8 @@ Historical candles → тот же Signal/TradingIdea/Risk/Tracker pipeline → 
 Подробные границы модулей и инварианты описаны в
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Отдельный V2 decision record с
 QualityGate, AI-контрактом, OOS-цифрами и ограничениями находится в
-[`docs/V2_QUALITY_AI.md`](docs/V2_QUALITY_AI.md).
+[`docs/V2_QUALITY_AI.md`](docs/V2_QUALITY_AI.md). Карта Telegram callback UX и
+текстовые примеры находятся в [`docs/V2_1_INLINE_UX.md`](docs/V2_1_INLINE_UX.md).
 
 ## Горизонты
 
@@ -148,7 +150,12 @@ python -m app.research quality-v2
 
 После `/start` доступны «Лучшие идеи», «Активные идеи», «Статистика»,
 «Настройки», «Анализ рынка» и «Статус системы». Все основные фильтры и
-notification preferences меняются кнопками. Slash-команды остаются fallback:
+notification preferences меняются кнопками. Под карточками идей, lifecycle
+alerts, акциями, top-3, статистикой, рынком и status размещены контекстные
+inline-кнопки. Watch/follow хранится в PostgreSQL, повторное нажатие идемпотентно,
+а состояние кнопки меняется edit-in-place. Watchlist, signal history, active
+ideas и результаты выводятся страницами по пять записей. Slash-команды и нижняя
+Reply Keyboard остаются fallback:
 
 ```text
 /best

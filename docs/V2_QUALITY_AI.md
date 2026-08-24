@@ -32,7 +32,7 @@ candles as published ideas so future cohort comparisons include actual outcomes.
 | Batch decision | `app/scanner.py` | one scanner and one scheduler |
 | AI second opinion | `app/ai_analyst.py` | deterministic score remains authoritative |
 | Experiment lifecycle | `app/experiments.py` | shared lifecycle evaluator |
-| Persistence | additive migrations `20260824_0010` + `0011` | existing `TradingIdea`, snapshots and experiment rows |
+| Persistence | additive migrations `20260824_0010`–`0012` | existing `TradingIdea`, snapshots and experiment rows |
 | Telegram | menus and callbacks in `app/bot.py` | slash commands remain fallback |
 | Metrics | cohort statistics in `app/operations.py` | V1 results remain separate |
 | Research | `app/quality_research.py` | existing leakage-safe backtest engine |
@@ -109,10 +109,10 @@ row. Only a quantitative `PASS` can invoke AI; AI cannot rescue `WEAK/REJECT`.
 
 ## Telegram UX
 
-The main reply keyboard contains six sections: best ideas, active ideas,
-statistics, settings, market analysis and system status. Inline buttons cover
-period/horizon selection, all user settings and idea details. Each idea exposes
-AI, technical, fundamental, market and lifecycle screens. Event preferences are
+The main reply keyboard contains six sections and remains the global navigation
+surface. V2.1 inline buttons provide context-local idea/instrument/lifecycle,
+watch/follow, results, market, statistics and status actions. User-specific
+state is loaded from PostgreSQL and updated in-place. Event preferences are
 applied to the owner as well as ordinary users. Disabling the owner AI filter
 publishes quant-PASS ideas with an explicit “Идея не проходила AI second
 opinion” label; AI remains enabled by default.
@@ -125,7 +125,8 @@ time, separately for 1D/5D/1M.
 
 Alembic `20260824_0010` is additive: it adds user preferences and V2 fields,
 `candidate_experiments` and `ai_request_logs`. Revision `20260824_0011` adds
-only fallback/raw usage telemetry columns with safe defaults. Existing ideas
+only fallback/raw usage telemetry columns with safe defaults. Revision
+`20260824_0012` adds per-user follow/watch-notification state. Existing ideas
 receive only compatibility defaults `v1 / LEGACY / NOT_REQUESTED`; no old
 outcome is rewritten. Startup migration and experiment lifecycle recovery run
 before polling.
@@ -136,7 +137,7 @@ fail-closed publication policy.
 
 ## Verification
 
-- full suite: `131 passed`;
+- full suite: see the latest release handoff (`pytest -q`);
 - Ruff format/check: passed;
 - Python compileall and dependency check: passed;
 - local existing-schema upgrade and application healthcheck: passed;

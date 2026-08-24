@@ -25,6 +25,9 @@ class MarketOverview:
     overbought: int
     relative_strength_leaders: tuple[tuple[str, float], ...]
     relative_strength_laggards: tuple[tuple[str, float], ...]
+    oversold_tickers: tuple[tuple[str, float], ...]
+    overbought_tickers: tuple[tuple[str, float], ...]
+    anomalous_volume: tuple[tuple[str, float], ...]
     summary: str
     ai_summary: str
 
@@ -74,6 +77,9 @@ class MarketOverviewService:
 
         bullish = bearish = sideways = oversold = overbought = 0
         relative: list[tuple[str, float]] = []
+        oversold_rows: list[tuple[str, float]] = []
+        overbought_rows: list[tuple[str, float]] = []
+        volume_rows: list[tuple[str, float]] = []
         for ticker, rows in histories.items():
             try:
                 features = prepare_technical_features(rows)
@@ -87,6 +93,12 @@ class MarketOverviewService:
                 sideways += 1
             oversold += features.rsi <= 30
             overbought += features.rsi >= 70
+            if features.rsi <= 30:
+                oversold_rows.append((ticker, features.rsi))
+            if features.rsi >= 70:
+                overbought_rows.append((ticker, features.rsi))
+            if features.volume_ratio is not None and features.volume_ratio >= 1.8:
+                volume_rows.append((ticker, features.volume_ratio))
             if len(rows) >= 21 and rows[-21].close:
                 relative.append(
                     (ticker, (rows[-1].close / rows[-21].close - 1 - benchmark_return) * 100)
@@ -172,6 +184,13 @@ class MarketOverviewService:
             overbought=overbought,
             relative_strength_leaders=tuple(relative[:5]),
             relative_strength_laggards=tuple(relative[-5:]),
+            oversold_tickers=tuple(sorted(oversold_rows, key=lambda item: item[1])[:10]),
+            overbought_tickers=tuple(
+                sorted(overbought_rows, key=lambda item: item[1], reverse=True)[:10]
+            ),
+            anomalous_volume=tuple(
+                sorted(volume_rows, key=lambda item: item[1], reverse=True)[:10]
+            ),
             summary=summary,
             ai_summary=ai_summary,
         )

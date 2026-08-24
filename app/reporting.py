@@ -18,6 +18,7 @@ from app.idea_repository import (
 )
 from app.models import TelegramUser, TradingIdea
 from app.repositories import list_report_users, mark_report_sent
+from app.telegram_ui import top_ideas_keyboard
 
 HORIZON_LABELS = {
     IdeaHorizon.INTRADAY_1D.value: "1 день",
@@ -168,7 +169,16 @@ class ReportingService:
                 )
             try:
                 if ideas:
-                    await bot.send_message(user.telegram_id, format_best_ideas(ideas))
+                    try:
+                        await bot.send_message(
+                            user.telegram_id,
+                            format_best_ideas(ideas),
+                            reply_markup=top_ideas_keyboard(ideas),
+                        )
+                    except TypeError as error:
+                        if "reply_markup" not in str(error):
+                            raise
+                        await bot.send_message(user.telegram_id, format_best_ideas(ideas))
                 async with self.session_factory() as session, session.begin():
                     if ideas:
                         await mark_ideas_notified(

@@ -25,6 +25,15 @@
   deletion or rewrite of existing `TradingIdea` rows.
 - Alembic revision `20260824_0011`; additive Gemini provider telemetry columns
   with safe defaults and no rewrite or deletion of existing V1/V2 data.
+- V2.1 contextual Telegram inline keyboards for new ideas, lifecycle alerts,
+  watched instruments, live analysis, top-3, results, statistics, market and
+  system status, with edit-in-place Back/Home navigation and bounded callback
+  payloads.
+- PostgreSQL-backed, per-user idempotent watch/follow state, pagination for
+  watchlist/signal history/open ideas/results, callback authorization and safe
+  handling of missing, deleted or no-longer-actionable objects.
+- Alembic revision `20260824_0012`; additive `idea_follows` and
+  `notify_watchlist` state with migration coverage from the previous V2 head.
 - Leakage-safe `app.research quality-v2` comparison: confirmation selection on
   TRAIN/VALIDATION and signal volume/WR/PF evaluation on untouched OOS TEST.
 - Horizon confirmation policy selected without TEST leakage: `1D=4` research,

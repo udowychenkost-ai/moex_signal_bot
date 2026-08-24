@@ -687,7 +687,8 @@ async def test_button_ux_and_settings_persistence() -> None:
     settings_labels = [
         button.text for row in settings_menu_keyboard().inline_keyboard for button in row
     ]
-    assert "🤖 AI-фильтр" in settings_labels
+    assert any("AI filter" in label for label in settings_labels)
+    assert any("Watch notifications" in label for label in settings_labels)
     section_callbacks = [
         button.callback_data for row in idea_sections_keyboard(42).inline_keyboard for button in row
     ]
@@ -710,6 +711,7 @@ async def test_button_ux_and_settings_persistence() -> None:
             ai_filter_enabled=False,
             notify_sl=False,
             notify_daily_summary=False,
+            notify_watchlist=False,
             minimum_confidence=85,
         )
     async with factory() as session:
@@ -718,7 +720,16 @@ async def test_button_ux_and_settings_persistence() -> None:
         assert not user.ai_filter_enabled
         assert not user.notify_sl
         assert not user.notify_daily_summary
+        assert not user.notify_watchlist
         assert user.minimum_confidence == 85
+        current_labels = [
+            button.text for row in settings_menu_keyboard(user).inline_keyboard for button in row
+        ]
+        assert "📨 Отчёты: Только сильные ✅" in current_labels
+        assert "⏱ Горизонт: Все ✅" in current_labels
+        assert "🎯 Min strength: 85+ ✅" in current_labels
+        assert "🧠 AI filter: OFF" in current_labels
+        assert "🔔 Watch notifications: OFF" in current_labels
         callbacks = [
             button.callback_data
             for row in settings_values_keyboard("notifications", user).inline_keyboard

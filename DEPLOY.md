@@ -65,11 +65,14 @@ the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
 
-Revisions `20260824_0010` and `20260824_0011` only add columns/tables and
+Revisions `20260824_0010`, `20260824_0011` and `20260824_0012` only add
+columns/tables and
 preserve every existing V1/V2 `TradingIdea` and experiment row. Existing V1
 rows remain labeled `strategy_version=v1`; V2 forward statistics use
 `v2_ai_quality_filter` and do not mix the baseline. Revision `0011` adds only
-provider fallback/raw usage telemetry.
+provider fallback/raw usage telemetry. Revision `0012` adds the per-user
+`idea_follows` relation and `notify_watchlist=true` preference; it neither
+clears nor rewrites existing users, ideas, experiments or notification outbox.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -103,11 +106,11 @@ suppressions.
 
 ## 4. Update and redeploy
 
-Before the first Gemini-default update, back up PostgreSQL as described below
+Before the V2.1 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
-cp .env ".env.pre-gemini-$(date -u +%Y%m%dT%H%M%SZ)"
+cp .env ".env.pre-v2.1-$(date -u +%Y%m%dT%H%M%SZ)"
 nano .env
 ```
 
@@ -139,7 +142,7 @@ docker compose exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 ```
 
-The expected Alembic revision is `20260824_0011`. Do not run `docker compose
+The expected Alembic revision is `20260824_0012`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
 
 The app performs startup recovery from PostgreSQL: open and pending ideas remain
@@ -147,6 +150,8 @@ in place, later candles continue their lifecycle, and the notification outbox
 prevents a previously delivered event from being sent twice.
 Open `candidate_experiments`, including AI-rejected rows, also resume lifecycle
 tracking so cohort outcomes are not lost after restart.
+Per-user watchlist and followed-idea button states are also restored from
+PostgreSQL after an app/container restart.
 
 ## 5. PostgreSQL backup and restore
 
