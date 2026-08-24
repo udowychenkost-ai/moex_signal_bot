@@ -33,6 +33,7 @@ from app.market_overview import MarketOverviewService
 from app.migrations import migrate_database
 from app.moex import MoexClient
 from app.observation import DataFreshnessGuard
+from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService
 from app.paper import PaperTradingService
 from app.quality import QualityGate
@@ -129,6 +130,7 @@ async def run_bot() -> None:
             )
             experiment_tracker = CandidateExperimentTracker(session_factory)
             ai_analyst = AIAnalystService(settings)
+            quality_gate = QualityGate(settings)
             scanner = MarketScanner(
                 session_factory,
                 ingestion,
@@ -137,7 +139,7 @@ async def run_bot() -> None:
                 paper,
                 fundamentals=fundamental_ingestion,
                 settings=settings,
-                quality_gate=QualityGate(settings),
+                quality_gate=quality_gate,
                 ai_analyst=ai_analyst,
                 experiment_tracker=experiment_tracker,
             )
@@ -159,6 +161,14 @@ async def run_bot() -> None:
                     session_factory,
                     benchmark=settings.market_benchmark,
                     ai_analyst=ai_analyst,
+                ),
+                OnDemandAIService(
+                    settings,
+                    session_factory,
+                    ingestion,
+                    ideas,
+                    ai_analyst,
+                    quality_gate,
                 ),
             )
             recovery_tracking = await tracker.track_all()

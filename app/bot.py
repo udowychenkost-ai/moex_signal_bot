@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -9,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
+    ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -18,8 +20,18 @@ from aiogram.types import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai_ux import (
+    format_current_ai_analysis,
+    format_current_ai_unavailable,
+    has_historical_ai_review,
+)
 from app.config import Settings
-from app.domain import InsufficientDataError, MoexApiError, UnknownTickerError
+from app.domain import (
+    InsufficientDataError,
+    MoexApiError,
+    StaleMarketDataError,
+    UnknownTickerError,
+)
 from app.forward import (
     format_ai_analysis,
     format_application_status,
@@ -35,6 +47,7 @@ from app.forward import (
 from app.ingestion import IngestionService
 from app.market_overview import MarketOverviewService, format_market_overview
 from app.models import CandidateExperiment, SignalRecord, TelegramUser, TradingIdea
+from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService, realized_r
 from app.paper import PaperTradingService, format_paper_summary
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
@@ -54,6 +67,7 @@ from app.telegram_context import (
     InstrumentContext,
     ResultItem,
     TelegramContextService,
+    normalize_ticker,
 )
 from app.telegram_ui import (
     idea_context_keyboard,
@@ -70,6 +84,7 @@ from app.telegram_ui import (
 )
 
 ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -82,14 +97,20 @@ class BotServices:
     paper: PaperTradingService | None = None
     operations: OperationalService | None = None
     market_overview: MarketOverviewService | None = None
+    on_demand_ai: OnDemandAIService | None = None
 
 
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔥 Лучшие идеи"), KeyboardButton(text="📊 Активные идеи")],
+            [KeyboardButton(text="🔥 Лучшие идеи"), KeyboardButton(text="👁 Отслеживаемые")],
+            [
+                KeyboardButton(text="📊 Активные идеи"),
+                KeyboardButton(text="📒 Результаты сигналов"),
+            ],
+            [KeyboardButton(text="🌍 Рынок сейчас"), KeyboardButton(text="🔎 Проверить акцию")],
             [KeyboardButton(text="📈 Статистика"), KeyboardButton(text="⚙️ Настройки")],
-            [KeyboardButton(text="🧠 Анализ рынка"), KeyboardButton(text="ℹ️ Статус системы")],
+            [KeyboardButton(text="🩺 Система")],
         ],
         resize_keyboard=True,
     )
@@ -448,9 +469,12 @@ def _results_text(result_filter: str, page: ContextPage[ResultItem]) -> str:
     if not items:
         lines.append("\nЗаписей пока нет.")
     for item in items:
+        status_label = {
+            "AI_REJECT": "Отклонено AI",
+        }.get(item.status, item.status)
         lines.append(
             f"\n• <b>{escape(item.ticker)}</b> · {escape(item.direction)} · "
-            f"{escape(item.horizon)}\n  {escape(item.status)} · {item.score:.0f}/100"
+            f"{escape(item.horizon)}\n  {escape(status_label)} · {item.score:.0f}/100"
         )
     lines.append(f"\nСтраница {page.page + 1}/{page.total_pages} · всего {page.total_items}")
     return "\n".join(lines)
@@ -492,6 +516,7 @@ def create_router(services: BotServices) -> Router:
             "/settings — текущие настройки\n"
             "/settings timeframe 1h — сменить интервал\n"
             "/settings risk 0.5 — риск на сделку, %\n\n"
+            "Кнопка «🔎 Проверить акцию» запросит тикер без slash-команды.\n\n"
             "⚠️ Не является индивидуальной инвестиционной рекомендацией.",
             reply_markup=main_menu(),
         )
@@ -617,6 +642,7 @@ def create_router(services: BotServices) -> Router:
         )
 
     @router.message(Command("status"))
+    @router.message(F.text == "🩺 Система")
     @router.message(F.text == "ℹ️ Статус системы")
     async def application_status(message: Message) -> None:
         await _ensure_message_user(message, services)
@@ -944,6 +970,64 @@ def create_router(services: BotServices) -> Router:
         )
         await callback.answer()
 
+    @router.callback_query(F.data.regexp(r"^idea_ai_now:[0-9]+$"))
+    async def idea_ai_now(callback: CallbackQuery) -> None:
+        user = await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None:
+            await callback.answer()
+            return
+        if services.on_demand_ai is None:
+            await callback.answer("Gemini analysis недоступен", show_alert=True)
+            return
+        idea_id = int(callback.data.partition(":")[2])
+        try:
+            context = await context_service.idea_context(user.telegram_id, idea_id)
+        except (ContextAccessError, ContextObjectNotFound) as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        if has_historical_ai_review(context.idea):
+            await callback.answer("У идеи уже есть creation-time AI review", show_alert=True)
+            return
+        await callback.answer("Gemini анализирует текущее состояние…")
+        await _edit_context(
+            callback,
+            f"⏳ <b>Gemini анализирует {escape(context.idea.ticker)}…</b>",
+            idea_context_keyboard(
+                context.idea,
+                watched=context.watched,
+                followed=context.followed,
+            ),
+        )
+        try:
+            result = await services.on_demand_ai.analyze(context.idea)
+        except (
+            InsufficientDataError,
+            MoexApiError,
+            StaleMarketDataError,
+            UnknownTickerError,
+        ) as error:
+            text = format_current_ai_unavailable(str(error))
+        except Exception:
+            logger.exception("On-demand Gemini analysis failed for idea %s", idea_id)
+            text = format_current_ai_unavailable(
+                "Сервис текущего анализа временно недоступен. Попробуйте позже."
+            )
+        else:
+            if result.candidate is None or result.review is None:
+                text = format_current_ai_unavailable(result.reason)
+            else:
+                text = format_current_ai_analysis(result.review, result.candidate)
+        fresh_context = await context_service.idea_context(user.telegram_id, idea_id)
+        await _edit_context(
+            callback,
+            text,
+            idea_context_keyboard(
+                fresh_context.idea,
+                watched=fresh_context.watched,
+                followed=fresh_context.followed,
+            ),
+        )
+
     @router.callback_query(F.data.regexp(r"^idea_(follow|unfollow):[0-9]+$"))
     async def idea_follow(callback: CallbackQuery) -> None:
         user = await _ensure_callback_user(callback, services)
@@ -975,6 +1059,7 @@ def create_router(services: BotServices) -> Router:
         )
         await callback.answer("Сохранено")
 
+    @router.message(F.text == "🌍 Рынок сейчас")
     @router.message(F.text == "🧠 Анализ рынка")
     async def market_analysis(message: Message) -> None:
         await _ensure_message_user(message, services)
@@ -1178,35 +1263,64 @@ def create_router(services: BotServices) -> Router:
         await _edit_markup(callback, keyboard)
         await callback.answer("Сохранено")
 
+    @router.message(F.text == "🔎 Проверить акцию")
+    async def request_ticker_check(message: Message) -> None:
+        await _ensure_message_user(message, services)
+        await message.answer(
+            "🔎 <b>Проверить акцию</b>\n\nВведите тикер MOEX, например <code>SBER</code>.",
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder="SBER",
+            ),
+        )
+
+    async def send_ticker_check(message: Message, secid: str, timeframe: str) -> None:
+        user = await _ensure_message_user(message, services)
+        try:
+            secid = normalize_ticker(secid)
+        except ContextObjectNotFound as error:
+            await message.answer(str(error))
+            return
+        if timeframe not in ALLOWED_TIMEFRAMES:
+            await message.answer("Интервал: 5m, 15m, 1h, 4h, 1d или 1w")
+            return
+        status = await message.answer(f"Обновляю {escape(secid)} · {timeframe}…")
+        try:
+            await services.ingestion.refresh_ticker(secid, timeframe)
+            generated = await services.signals.generate(
+                secid,
+                timeframe,
+                risk_per_trade_pct=user.risk_per_trade_pct,
+            )
+            context = await context_service.instrument_context(user.telegram_id, secid)
+        except (ContextObjectNotFound, UnknownTickerError, InsufficientDataError) as error:
+            await status.edit_text(escape(str(error)))
+        except MoexApiError:
+            await status.edit_text("MOEX ISS временно недоступен. Попробуйте чуть позже.")
+        else:
+            await status.edit_text(
+                format_signal(generated),
+                reply_markup=instrument_analysis_keyboard(secid, watched=context.watched),
+            )
+
     @router.message(Command("signal"))
     async def signal(message: Message) -> None:
-        user = await _ensure_message_user(message, services)
         tokens = _tokens(message)
         if len(tokens) < 2:
             await message.answer("Формат: <code>/signal SBER [15m]</code>")
             return
         secid = tokens[1].upper()
+        user = await _ensure_message_user(message, services)
         timeframe = tokens[2].lower() if len(tokens) > 2 else user.default_timeframe
-        if timeframe not in ALLOWED_TIMEFRAMES:
-            await message.answer("Интервал: 5m, 15m, 1h, 4h, 1d или 1w")
-            return
-        status = await message.answer(f"Обновляю {secid} · {timeframe}…")
-        try:
-            await services.ingestion.refresh_ticker(secid, timeframe)
-            generated = await services.signals.generate(
-                secid, timeframe, risk_per_trade_pct=user.risk_per_trade_pct
-            )
-        except (UnknownTickerError, InsufficientDataError) as error:
-            await status.edit_text(str(error))
-        except MoexApiError:
-            await status.edit_text("MOEX ISS временно недоступен. Попробуйте чуть позже.")
-        else:
-            await status.edit_text(format_signal(generated))
+        await send_ticker_check(message, secid, timeframe)
 
     @router.message(Command("watchlist"))
+    @router.message(F.text == "👁 Отслеживаемые")
     async def watchlist(message: Message) -> None:
         user = await _ensure_message_user(message, services)
         tokens = _tokens(message)
+        if message.text == "👁 Отслеживаемые":
+            tokens = ["/watchlist"]
         if len(tokens) == 1:
             page = await context_service.watchlist_page(user.telegram_id, 0)
             tickers = tuple(item.secid for item in page.items)
@@ -1321,6 +1435,14 @@ def create_router(services: BotServices) -> Router:
                 minimum_confidence=minimum_confidence,
             )
         await message.answer("Настройки сохранены")
+
+    @router.message(F.text == "📒 Результаты сигналов")
+    async def results_from_menu(message: Message) -> None:
+        await _ensure_message_user(message, services)
+        await message.answer(
+            "📒 <b>Результаты сигналов</b>\nВыберите раздел:",
+            reply_markup=results_keyboard(),
+        )
 
     @router.callback_query(F.data == "results:menu")
     async def results_menu(callback: CallbackQuery) -> None:
@@ -1603,5 +1725,14 @@ def create_router(services: BotServices) -> Router:
             await message.answer("Paper trading сейчас недоступен.")
             return
         await message.answer(format_paper_summary(await services.paper.summary()))
+
+    @router.message(F.reply_to_message.text.startswith("🔎 Проверить акцию"))
+    async def ticker_check_reply(message: Message) -> None:
+        user = await _ensure_message_user(message, services)
+        tokens = _tokens(message)
+        if len(tokens) != 1:
+            await message.answer("Введите один тикер, например <code>SBER</code>.")
+            return
+        await send_ticker_check(message, tokens[0].upper(), user.default_timeframe)
 
     return router

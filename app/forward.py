@@ -12,6 +12,7 @@ from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai_ux import format_ai_idea_summary, format_historical_ai_analysis
 from app.config import Settings
 from app.domain import IdeaHorizon, IdeaStatus
 from app.idea_repository import OPEN_IDEA_STATUSES
@@ -87,18 +88,7 @@ def _format_time(value: datetime | None, timezone: str) -> str:
 def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
     rationale = "\n".join(f"• {escape(line)}" for line in idea.rationale.splitlines()[:3] if line)
     regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
-    ai_score = f"{idea.ai_score:.0f}/100" if idea.ai_score is not None else "не проверено"
-    risks = []
-    try:
-        risks = json.loads(idea.ai_key_risks or "[]")
-    except json.JSONDecodeError:
-        risks = []
-    risks_text = "\n".join(f"• {escape(str(item))}" for item in risks[:2]) or "• нет данных"
-    ai_summary = (
-        idea.ai_short_summary
-        if idea.ai_verdict in {"STRONG_APPROVE", "APPROVE", "WAIT", "REJECT"}
-        else "Идея не проходила AI second opinion."
-    )
+    ai_block = format_ai_idea_summary(idea)
     return (
         "🔥 <b>СИЛЬНАЯ ИДЕЯ</b>\n🆕 НОВАЯ ИДЕЯ\n\n"
         f"ID: <code>{idea.id}</code>\n"
@@ -121,10 +111,7 @@ def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
         f"({float(idea.volume_score or 0):+.0f}/100)\n"
         f"📉 Momentum: <b>{float(idea.momentum_extreme_score or 0):+.0f}/100</b>\n"
         f"🏢 Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
-        f"🧠 <b>AI VERDICT: {escape(idea.ai_verdict)}</b> — {ai_score}\n"
-        f"{escape(ai_summary or 'AI second opinion не выполнялся.')}\n"
-        f"{escape(idea.ai_why_now or '')}\n\n"
-        f"⚠️ <b>Основные риски</b>\n{risks_text}\n\n"
+        f"{ai_block}\n\n"
         f"<b>Quant rationale</b>\n{rationale}\n\n"
         f"Статус: <b>{idea.status}</b> · {_format_time(idea.created_at, timezone)}\n\n"
         "⚠️ Только наблюдение. Реальные сделки не выполняются."
@@ -318,25 +305,7 @@ def format_idea_history(history: IdeaHistory, *, timezone: str) -> str:
 
 
 def format_ai_analysis(history: IdeaHistory) -> str:
-    idea = history.idea
-    risks = json.loads(idea.ai_key_risks or "[]")
-    invalidations = json.loads(idea.ai_invalidation_conditions or "[]")
-    return (
-        "🧠 <b>AI-анализ</b>\n\n"
-        f"Вердикт: <b>{escape(idea.ai_verdict)}</b> · "
-        f"оценка <b>{_metric(idea.ai_score)}/100</b>\n"
-        f"Уверенность в анализе: <b>{escape(idea.ai_confidence or 'n/a')}</b>\n\n"
-        f"<b>Почему идея интересна</b>\n{escape(idea.ai_bull_case or 'нет данных')}\n\n"
-        f"<b>Что против</b>\n{escape(idea.ai_bear_case or 'нет данных')}\n\n"
-        f"<b>Почему сейчас</b>\n{escape(idea.ai_why_now or 'нет данных')}\n\n"
-        f"<b>Главные риски</b>\n"
-        + ("\n".join(f"• {escape(str(item))}" for item in risks) or "• нет данных")
-        + "\n\n<b>Условия отмены</b>\n"
-        + (
-            "\n".join(f"• {escape(str(item))}" for item in invalidations)
-            or f"• {escape(idea.invalidation_reason)}"
-        )
-    )
+    return format_historical_ai_analysis(history.idea)
 
 
 def format_technical_analysis(history: IdeaHistory) -> str:

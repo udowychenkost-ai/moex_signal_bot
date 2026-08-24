@@ -279,6 +279,25 @@ async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_gemini_review_reuses_contract_and_includes_quality_context() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient(gemini_payload())
+
+    review = await AIAnalystService(settings, client=client).review_current(quant, quality)
+
+    assert review.status == "OK"
+    request = client.requests[0]["json"]
+    snapshot = json.loads(request["contents"][0]["parts"][0]["text"])
+    assert snapshot["quality_gate_result"] == quality.decision.value
+    assert snapshot["quality_gate_reasons"] == list(quality.reasons)
+    assert "candles" not in snapshot
+    assert request["generationConfig"]["responseMimeType"] == "application/json"
+    assert "Never invent" in request["systemInstruction"]["parts"][0]["text"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
@@ -780,11 +799,14 @@ async def test_button_ux_and_settings_persistence() -> None:
     menu_labels = [button.text for row in main_menu().keyboard for button in row]
     assert menu_labels == [
         "🔥 Лучшие идеи",
+        "👁 Отслеживаемые",
         "📊 Активные идеи",
+        "📒 Результаты сигналов",
+        "🌍 Рынок сейчас",
+        "🔎 Проверить акцию",
         "📈 Статистика",
         "⚙️ Настройки",
-        "🧠 Анализ рынка",
-        "ℹ️ Статус системы",
+        "🩺 Система",
     ]
     settings_labels = [
         button.text for row in settings_menu_keyboard().inline_keyboard for button in row

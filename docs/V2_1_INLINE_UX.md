@@ -4,6 +4,11 @@ The lower Reply Keyboard remains the global navigation surface. Inline
 keyboards act only on the card currently shown in chat. Slash commands remain
 available and no callback can place an exchange or broker order.
 
+V2.1.1 expands the Reply Keyboard to a compact two-column grid: best ideas,
+watchlist, active ideas, results, current market, ticker check, statistics,
+settings and system health. `Проверить акцию` asks for a MOEX ticker through
+Telegram ForceReply and runs the same current signal path as `/signal`.
+
 ## Text examples
 
 New idea:
@@ -74,6 +79,20 @@ Paginated watchlist:
   lifecycle events stay separate notifications. Home sends one small message so
   Telegram can restore the persistent Reply Keyboard, which cannot be attached
   to an inline edit.
+
+## Historical ideas without AI review
+
+`NOT_REQUESTED`, `AI_NOT_REVIEWED` and provider-internal status values are never
+rendered to the user. An idea without a successful creation-time review shows a
+compact explanation and omits empty bull/bear/timing/risk sections. Its
+`Проанализировать сейчас` action refreshes the horizon timeframes, builds a new
+current candidate, runs the unchanged QualityGate and Gemini structured
+contract, and stores only request telemetry. It does not call
+`apply_ai_review`, update `TradingIdea`, or replace `TradingIdeaSnapshot`.
+
+Current results are explicitly labeled `AI-анализ выполнен сейчас, а не в момент
+создания идеи.` Russian UI labels map the four stored verdicts without changing
+their database values: strong confirmation, confirmed, wait and rejected.
 
 ## Navigation map
 

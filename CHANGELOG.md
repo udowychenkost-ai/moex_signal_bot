@@ -4,6 +4,16 @@
 
 ### Added
 
+- V2.1.1 Telegram UX hotfix: compact historical no-review state, Russian Gemini
+  verdict labels and an explicit `Проанализировать сейчас` action that uses
+  current market data without rewriting the idea or immutable creation snapshot.
+- Expanded 2-column Reply Keyboard with direct watchlist, results, market,
+  ticker-check, statistics, settings and system routes. The ticker check uses a
+  ForceReply flow and no slash command is required.
+- On-demand Gemini calls reuse the existing structured schema, provider fallback
+  and no-invention system prompt; attempts are stored as `ON_DEMAND_IDEA`
+  telemetry but never applied to historical `TradingIdea` fields.
+
 - V2 `QualityGateResult(PASS/WEAK/REJECT)` with directional technical/total
   floors, liquidity, volume, timeframe coverage, independent confirmations,
   explicit contradictory factors and strong-regime BUY/SELL rejection.

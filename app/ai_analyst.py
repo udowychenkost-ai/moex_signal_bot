@@ -407,6 +407,50 @@ class AIAnalystService:
             return self._failed_review(final, attempts)
         return self._review_result(analysis, final, attempts)
 
+    async def review_current(
+        self,
+        candidate: TradingIdeaData,
+        quality: QualityGateResult,
+    ) -> AIReviewResult:
+        """Use the normal provider contract for an explicit, non-publishing current review."""
+        payload = structured_snapshot(candidate, quality)
+        payload.update(
+            {
+                "quality_gate_result": quality.decision.value,
+                "quality_gate_reasons": list(quality.reasons),
+            }
+        )
+        final, attempts = await self._generate(
+            system_prompt=SYSTEM_PROMPT,
+            payload=payload,
+            schema=AIAnalysis.model_json_schema(),
+            schema_name="moex_ai_verdict",
+            max_output_tokens=self.settings.ai_max_output_tokens,
+        )
+        if final.status != "OK":
+            logger.warning(
+                "Current AI review failed for %s: %s",
+                candidate.ticker,
+                _attempt_error(attempts),
+            )
+            return self._failed_review(final, attempts)
+        try:
+            analysis = AIAnalysis.model_validate_json(final.text)
+        except (ValueError, ValidationError) as error:
+            invalid = replace(
+                attempts[-1],
+                status="ERROR",
+                error=f"structured response validation failed: {error}"[:2_000],
+            )
+            attempts = (*attempts[:-1], invalid)
+            logger.warning(
+                "Current AI review schema validation failed for %s: %s",
+                candidate.ticker,
+                error,
+            )
+            return self._failed_review(final, attempts)
+        return self._review_result(analysis, final, attempts)
+
     async def summarize_market(self, market_snapshot: dict[str, object]) -> MarketAIReviewResult:
         unavailable = "AI summary unavailable; deterministic market metrics remain available."
         final, attempts = await self._generate(

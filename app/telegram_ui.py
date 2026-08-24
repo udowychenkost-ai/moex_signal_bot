@@ -4,6 +4,7 @@ from urllib.parse import quote
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.ai_ux import has_historical_ai_review
 from app.idea_repository import OPEN_IDEA_STATUSES
 from app.models import TradingIdea
 
@@ -39,39 +40,48 @@ def idea_context_keyboard(
     else:
         follow_text = "🔒 Идея закрыта"
         follow_callback = "noop"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=watch_text,
+                callback_data=f"instrument_{watch_action}:{idea.ticker}:{idea.id}",
+            ),
+            InlineKeyboardButton(
+                text=follow_text,
+                callback_data=follow_callback,
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="❓ Почему идея?", callback_data=f"idea_why:{idea.id}"),
+            InlineKeyboardButton(text="🧠 AI-анализ", callback_data=f"idea_ai:{idea.id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Теханализ", callback_data=f"idea_tech:{idea.id}"),
+            InlineKeyboardButton(text="🌍 Рынок", callback_data=f"idea_market:{idea.id}"),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔄 Что изменилось?",
+                callback_data=f"idea_changes:{idea.id}",
+            ),
+            InlineKeyboardButton(text="📊 Открыть на MOEX", url=moex_url(idea.ticker)),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ К идеям", callback_data="ideas:0"),
+            InlineKeyboardButton(text="🏠 Главное меню", callback_data="home"),
+        ],
+    ]
+    if not has_historical_ai_review(idea):
+        rows.insert(
+            3,
             [
                 InlineKeyboardButton(
-                    text=watch_text,
-                    callback_data=f"instrument_{watch_action}:{idea.ticker}:{idea.id}",
-                ),
-                InlineKeyboardButton(
-                    text=follow_text,
-                    callback_data=follow_callback,
-                ),
+                    text="🧠 Проанализировать сейчас",
+                    callback_data=f"idea_ai_now:{idea.id}",
+                )
             ],
-            [
-                InlineKeyboardButton(text="❓ Почему идея?", callback_data=f"idea_why:{idea.id}"),
-                InlineKeyboardButton(text="🧠 AI-анализ", callback_data=f"idea_ai:{idea.id}"),
-            ],
-            [
-                InlineKeyboardButton(text="📊 Теханализ", callback_data=f"idea_tech:{idea.id}"),
-                InlineKeyboardButton(text="🌍 Рынок", callback_data=f"idea_market:{idea.id}"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔄 Что изменилось?",
-                    callback_data=f"idea_changes:{idea.id}",
-                ),
-                InlineKeyboardButton(text="📊 Открыть на MOEX", url=moex_url(idea.ticker)),
-            ],
-            [
-                InlineKeyboardButton(text="⬅️ К идеям", callback_data="ideas:0"),
-                InlineKeyboardButton(text="🏠 Главное меню", callback_data="home"),
-            ],
-        ]
-    )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def lifecycle_context_keyboard(idea: TradingIdea, *, closed: bool) -> InlineKeyboardMarkup:

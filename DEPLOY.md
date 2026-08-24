@@ -132,6 +132,7 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.1/' .env
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
 docker compose build --pull
 docker compose up -d --remove-orphans
