@@ -32,8 +32,9 @@
   independent confirmations, explicit conflicts, regime overrides and R:R;
 - batch ranking по `final_quality_score`, configurable top-N/day limits и
   cooldown для `ticker + horizon + direction`;
-- fail-closed OpenAI second opinion только для `PASS` candidates, строгий JSON
-  schema, token/cost/latency/error telemetry и запрет LLM «спасать» REJECT;
+- fail-closed Gemini second opinion только для `PASS` candidates, строгий JSON
+  schema, provider/model/usage/cost/latency/error/fallback telemetry и запрет
+  LLM «спасать» REJECT; OpenAI сохранён как альтернативный provider;
 - frozen `candidate_experiments` для quant/AI approved/rejected cohorts и
   отдельный lifecycle фактического результата даже для неопубликованных идей;
 - Telegram-меню из шести разделов, button-only настройки, V2-карточка и экраны
@@ -119,7 +120,10 @@ Copy-Item .env.example .env
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:replace_me
-OPENAI_API_KEY=sk-replace_me
+GEMINI_API_KEY=replace_me
+AI_PROVIDER=gemini
+AI_MODEL=gemini-2.5-flash
+AI_FALLBACK_MODEL=gemini-2.5-flash-lite
 ```
 
 Команды приложения:
@@ -179,10 +183,15 @@ research-only, а leakage-safe TRAIN/VALIDATION выбрали `5D=5` и `1M=5` 
 проверки на отдельном unseen TEST. AI
 получает только structured snapshot, не свечи и не внешний news context.
 
-Если `OPENAI_API_KEY` отсутствует, timeout/HTTP error/schema error или model
-refusal дают `WAIT`: candidate остаётся в research cohort, но `TradingIdea` не
-публикуется. Небезопасный fallback по умолчанию выключен. `AI score` — рейтинг
-анализа 0–100, не статистическая вероятность успеха.
+Default provider — Gemini `gemini-2.5-flash`. Только при timeout, rate limit или
+временной недоступности primary выполняется один запрос к
+`gemini-2.5-flash-lite`. Если обе модели недоступны, отсутствует
+`GEMINI_API_KEY`, ответ повреждён или не соответствует schema, результат —
+`AI_NOT_REVIEWED / WAIT`: candidate остаётся в research cohort, но
+`TradingIdea` не публикуется. Fallback без успешного AI review по умолчанию
+выключен. `AI score` — рейтинг анализа 0–100, не статистическая вероятность
+успеха. Для альтернативного OpenAI provider задайте `AI_PROVIDER=openai`,
+совместимый `AI_MODEL` и `OPENAI_API_KEY`.
 
 `TECHNICAL_SCORING_MODEL=legacy` оставлен default, чтобы обновление не меняло
 существующие сигналы скрыто. Компонентный вариант включается явно:

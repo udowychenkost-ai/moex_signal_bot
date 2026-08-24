@@ -159,33 +159,44 @@ def test_strong_opposing_market_rejects_ordinary_signal(
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
+    def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
         self.payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "https://provider.invalid/test")
+            response = httpx.Response(self.status_code, request=request, json=self.payload)
+            response.raise_for_status()
 
     def json(self) -> dict[str, object]:
         return self.payload
 
 
 class FakeClient:
-    def __init__(self, payload: dict[str, object] | Exception) -> None:
-        self.payload = payload
+    def __init__(
+        self,
+        payload: dict[str, object] | FakeResponse | Exception | list[object],
+    ) -> None:
+        self.payloads = list(payload) if isinstance(payload, list) else [payload]
         self.requests: list[dict[str, object]] = []
 
-    async def post(self, _url: str, **kwargs: object) -> FakeResponse:
-        self.requests.append(kwargs)
-        if isinstance(self.payload, Exception):
-            raise self.payload
-        return FakeResponse(self.payload)
+    async def post(self, url: str, **kwargs: object) -> FakeResponse:
+        self.requests.append({"url": url, **kwargs})
+        outcome = self.payloads.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, FakeResponse):
+            return outcome
+        assert isinstance(outcome, dict)
+        return FakeResponse(outcome)
 
 
-def ai_payload(**overrides: object) -> dict[str, object]:
+def analysis_body(**overrides: object) -> dict[str, object]:
     body = {
         "verdict": "APPROVE",
-        "ai_score": 82,
-        "confidence_in_analysis": "HIGH",
+        "score": 82,
+        "analysis_confidence": "HIGH",
         "bull_case": "Trend and volume agree.",
         "bear_case": "Market reversal remains possible.",
         "key_risks": ["Volatility expansion"],
@@ -194,66 +205,230 @@ def ai_payload(**overrides: object) -> dict[str, object]:
         "short_summary": "Independent factors support the setup.",
     }
     body.update(overrides)
+    return body
+
+
+def gemini_payload(**overrides: object) -> dict[str, object]:
+    body = analysis_body(**overrides)
     return {
-        "output": [{"content": [{"type": "output_text", "text": json.dumps(body)}]}],
-        "usage": {"input_tokens": 100, "output_tokens": 50},
+        "candidates": [{"content": {"parts": [{"text": json.dumps(body)}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 50,
+            "thoughtsTokenCount": 5,
+            "totalTokenCount": 155,
+        },
+        "modelVersion": "gemini-2.5-flash",
     }
 
 
+def openai_payload(**overrides: object) -> dict[str, object]:
+    body = analysis_body(**overrides)
+    return {
+        "output": [{"content": [{"type": "output_text", "text": json.dumps(body)}]}],
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+        "model": "gpt-5-mini-2026-01-01",
+    }
+
+
+def test_gemini_is_the_default_provider() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.ai_provider == "gemini"
+    assert settings.ai_model == "gemini-2.5-flash"
+    assert settings.ai_fallback_model == "gemini-2.5-flash-lite"
+
+
 @pytest.mark.asyncio
-async def test_ai_schema_parsing_and_cost_telemetry() -> None:
-    settings = Settings(_env_file=None, openai_api_key="test")
+async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
-    client = FakeClient(ai_payload())
+    client = FakeClient(gemini_payload())
 
     review = await AIAnalystService(settings, client=client).review(quant, quality)
 
     assert review.approved
-    assert review.analysis.ai_score == 82
+    assert review.analysis.score == 82
+    assert review.provider == "gemini"
+    assert review.model == "gemini-2.5-flash"
     assert review.input_tokens == 100
-    assert review.output_tokens == 50
+    assert review.output_tokens == 55
+    assert review.usage is not None
     request = client.requests[0]["json"]
     assert isinstance(request, dict)
-    assert request["text"]["format"]["strict"] is True
-    assert request["max_output_tokens"] == settings.ai_max_output_tokens
+    assert client.requests[0]["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert client.requests[0]["headers"]["x-goog-api-key"] == "test"
+    config = request["generationConfig"]
+    assert config["responseMimeType"] == "application/json"
+    schema = config["responseJsonSchema"]
+    assert {"score", "analysis_confidence"}.issubset(schema["properties"])
+    assert "ai_score" not in schema["properties"]
+    snapshot = json.loads(request["contents"][0]["parts"][0]["text"])
+    assert snapshot["ticker"] == "SBER"
+    assert "candles" not in snapshot
+    assert "ohlcv" not in snapshot
+    assert "Never invent" in request["systemInstruction"]["parts"][0]["text"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
-        {"output": [{"content": [{"type": "output_text", "text": "not-json"}]}]},
-        ai_payload(verdict="MAYBE"),
-        httpx.ReadTimeout("timeout"),
+        {"candidates": [{"content": {"parts": [{"text": "not-json"}]}}]},
+        gemini_payload(verdict="MAYBE"),
     ],
 )
-async def test_ai_malformed_timeout_or_invalid_enum_fails_closed(
-    payload: dict[str, object] | Exception,
+async def test_gemini_malformed_or_invalid_enum_fails_closed_without_fallback(
+    payload: dict[str, object],
 ) -> None:
-    settings = Settings(_env_file=None, openai_api_key="test")
+    settings = Settings(_env_file=None, gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
 
-    review = await AIAnalystService(settings, client=FakeClient(payload)).review(quant, quality)
+    client = FakeClient(payload)
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
 
     assert review.analysis.verdict == "WAIT"
-    assert review.status == "ERROR"
+    assert review.status == "AI_NOT_REVIEWED"
     assert not review.approved
+    assert not review.fallback_used
+    assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "primary_failure",
+    [
+        httpx.ReadTimeout("timeout"),
+        FakeResponse({"error": {"message": "quota"}}, status_code=429),
+    ],
+)
+async def test_gemini_timeout_or_rate_limit_uses_flash_lite_once(
+    primary_failure: Exception | FakeResponse,
+) -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    fallback_payload = gemini_payload()
+    fallback_payload["modelVersion"] = "gemini-2.5-flash-lite"
+    client = FakeClient([primary_failure, fallback_payload])
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.approved
+    assert review.fallback_used
+    assert review.model == "gemini-2.5-flash-lite"
+    assert review.request_count == 2
+    assert review.error_count == 1
+    assert len(client.requests) == 2
+    assert client.requests[1]["url"].endswith("/models/gemini-2.5-flash-lite:generateContent")
+
+
+@pytest.mark.asyncio
+async def test_both_gemini_models_unavailable_is_not_reviewed_wait() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient([httpx.ReadTimeout("primary"), httpx.ReadTimeout("fallback")])
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.analysis.verdict == "WAIT"
+    assert review.status == "AI_NOT_REVIEWED"
+    assert review.fallback_used
+    assert review.model == "gemini-2.5-flash-lite"
+    assert review.request_count == 2
+    assert not review.approved
+    assert len(client.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_remains_available() -> None:
+    settings = Settings(
+        _env_file=None,
+        ai_provider="openai",
+        ai_model="gpt-5-mini",
+        openai_api_key="test",
+    )
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient(openai_payload())
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.approved
+    assert review.provider == "openai"
+    assert review.model == "gpt-5-mini-2026-01-01"
+    assert len(client.requests) == 1
+    request = client.requests[0]["json"]
+    assert request["text"]["format"]["strict"] is True
 
 
 @pytest.mark.asyncio
 async def test_ai_unavailable_fails_closed_without_http_request() -> None:
-    settings = Settings(_env_file=None, openai_api_key="")
+    settings = Settings(_env_file=None, gemini_api_key="")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
 
-    review = await AIAnalystService(settings, client=FakeClient(ai_payload())).review(
-        quant, quality
-    )
+    client = FakeClient(gemini_payload())
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
 
     assert review.analysis.verdict == "WAIT"
-    assert "OPENAI_API_KEY" in review.error
+    assert review.status == "AI_NOT_REVIEWED"
+    assert "GEMINI_API_KEY" in review.error
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> None:
+    engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    apply_quality_result(quant, quality, strategy_version=settings.strategy_version)
+    fallback_payload = gemini_payload()
+    fallback_payload["modelVersion"] = "gemini-2.5-flash-lite"
+    review = await AIAnalystService(
+        settings,
+        client=FakeClient([httpx.ReadTimeout("primary"), fallback_payload]),
+    ).review(quant, quality)
+
+    async with factory() as session, session.begin():
+        await upsert_instruments(
+            session,
+            [InstrumentData("SBER", "TQBR", "Сбербанк", daily_turnover=1e9)],
+        )
+        experiment = await save_candidate_experiment(
+            session,
+            quant,
+            quality,
+            review=review,
+            publish_reason="AI_APPROVE",
+        )
+        experiment_id = experiment.id
+    async with factory() as session:
+        stored = await session.get(CandidateExperiment, experiment_id)
+        requests = list(
+            await session.scalars(
+                select(AIRequestLog)
+                .where(AIRequestLog.candidate_id == experiment_id)
+                .order_by(AIRequestLog.id)
+            )
+        )
+
+    assert stored is not None
+    assert stored.ai_provider == "gemini"
+    assert stored.ai_model == "gemini-2.5-flash-lite"
+    assert stored.ai_fallback_used
+    assert "attempts" in json.loads(stored.ai_usage_json)
+    assert [(item.model, item.fallback_used) for item in requests] == [
+        ("gemini-2.5-flash", False),
+        ("gemini-2.5-flash-lite", True),
+    ]
+    assert json.loads(requests[1].usage_json)["totalTokenCount"] == 155
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -367,8 +542,8 @@ class ApprovingAI:
         return AIReviewResult(
             analysis=AIAnalysis(
                 verdict="APPROVE",
-                ai_score=80,
-                confidence_in_analysis="HIGH",
+                score=80,
+                analysis_confidence="HIGH",
                 bull_case="Multiple factors agree.",
                 bear_case="The setup can still fail.",
                 key_risks=["Volatility"],

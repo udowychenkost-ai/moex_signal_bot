@@ -13,7 +13,7 @@ quant candidate
   -> frozen candidate_experiment
   -> PASS candidates ranked by final_quality_score
   -> cooldown and per-horizon AI candidate cap
-  -> structured OpenAI second opinion
+  -> structured provider second opinion (Gemini default)
   -> APPROVE / STRONG_APPROVE only
   -> per-scan and per-day top-N
   -> existing TradingIdea repository and lifecycle
@@ -32,7 +32,7 @@ candles as published ideas so future cohort comparisons include actual outcomes.
 | Batch decision | `app/scanner.py` | one scanner and one scheduler |
 | AI second opinion | `app/ai_analyst.py` | deterministic score remains authoritative |
 | Experiment lifecycle | `app/experiments.py` | shared lifecycle evaluator |
-| Persistence | migration `20260824_0010` | existing `TradingIdea` and snapshots |
+| Persistence | additive migrations `20260824_0010` + `0011` | existing `TradingIdea`, snapshots and experiment rows |
 | Telegram | menus and callbacks in `app/bot.py` | slash commands remain fallback |
 | Metrics | cohort statistics in `app/operations.py` | V1 results remain separate |
 | Research | `app/quality_research.py` | existing leakage-safe backtest engine |
@@ -80,23 +80,31 @@ claimed in these historical figures. Full metrics and limitations are in
 
 ## AI contract
 
-Provider: OpenAI Responses API. Default model: `gpt-5-mini`, configurable through
-`AI_MODEL`. The adapter uses strict Structured Outputs with a Pydantic-generated
-JSON schema, a bounded output budget and only a structured decision snapshot.
-See the official [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs)
-and [GPT-5 mini model reference](https://developers.openai.com/api/docs/models/gpt-5-mini).
+Default provider: Google Gemini `gemini-2.5-flash`, configurable through
+`AI_PROVIDER` and `AI_MODEL`. `OpenAIProvider` remains available as an explicit
+alternative. Both adapters use a Pydantic-generated JSON schema, a bounded
+output budget and only the same compact decision snapshot. Gemini uses
+`responseMimeType=application/json` plus `responseJsonSchema`; unsupported
+Pydantic validation keywords are removed from the wire schema and validated
+locally after receipt. API details: [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
+[Gemini 2.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite)
+and [API errors](https://ai.google.dev/gemini-api/docs/generate-content/api-errors).
 
 The prompt forbids invented news, financial figures, levels, prices, events and
 forecasts. Missing inputs are marked unavailable. The result schema contains:
 
 - `verdict`: `STRONG_APPROVE`, `APPROVE`, `WAIT` or `REJECT`;
-- `ai_score` from 0 to 100, explicitly not a calibrated probability;
-- analysis confidence, bull/bear cases, one to three risks, why-now,
-  invalidation conditions and a short summary.
+- `score` from 0 to 100, explicitly not a calibrated probability;
+- `analysis_confidence`, `bull_case`, `bear_case`, `why_now`, `key_risks`,
+  `invalidation_conditions` and `short_summary`.
 
-HTTP errors, timeout, refusal, malformed JSON, schema mismatch and a missing key
-all fail closed to `WAIT`. Request status, input/output tokens, estimated cost,
-latency and error details are stored in `ai_request_logs` and the frozen candidate
+Timeout/rate-limit/temporary-unavailable errors from the primary Gemini model
+permit exactly one request to `gemini-2.5-flash-lite`. No fallback is attempted
+for malformed JSON, schema mismatch, authentication/configuration errors or
+other permanent failures. If no valid review is received, the result is
+`AI_NOT_REVIEWED / WAIT`. Request provider, exact returned model, raw usage,
+input/output tokens, estimated cost, latency, error and `fallback_used` are
+stored per attempt in `ai_request_logs` and summarized in the frozen candidate
 row. Only a quantitative `PASS` can invoke AI; AI cannot rescue `WEAK/REJECT`.
 
 ## Telegram UX
@@ -116,17 +124,19 @@ time, separately for 1D/5D/1M.
 ## Database and deployment
 
 Alembic `20260824_0010` is additive: it adds user preferences and V2 fields,
-`candidate_experiments` and `ai_request_logs`. Existing ideas receive only
-compatibility defaults `v1 / LEGACY / NOT_REQUESTED`; no old outcome is rewritten.
-Startup migration and experiment lifecycle recovery run before polling.
+`candidate_experiments` and `ai_request_logs`. Revision `20260824_0011` adds
+only fallback/raw usage telemetry columns with safe defaults. Existing ideas
+receive only compatibility defaults `v1 / LEGACY / NOT_REQUESTED`; no old
+outcome is rewritten. Startup migration and experiment lifecycle recovery run
+before polling.
 
 Deployment, healthchecks, logs, PostgreSQL backup/restore and redeploy commands
-are documented in `DEPLOY.md`. `OPENAI_API_KEY` is required for the default
+are documented in `DEPLOY.md`. `GEMINI_API_KEY` is required for the default
 fail-closed publication policy.
 
 ## Verification
 
-- full suite: `125 passed`;
+- full suite: `131 passed`;
 - Ruff format/check: passed;
 - Python compileall and dependency check: passed;
 - local existing-schema upgrade and application healthcheck: passed;

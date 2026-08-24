@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from html import escape
 
@@ -126,20 +127,41 @@ class MarketOverviewService:
             )
             ai_summary = review.summary
             async with self.session_factory() as session, session.begin():
-                session.add(
-                    AIRequestLog(
-                        request_kind="MARKET_SUMMARY",
-                        provider=review.provider,
-                        model=review.model,
-                        status=review.status,
-                        input_tokens=review.input_tokens,
-                        output_tokens=review.output_tokens,
-                        estimated_cost_usd=review.estimated_cost_usd,
-                        latency_ms=review.latency_ms,
-                        error=review.error,
-                        created_at=review.reviewed_at,
+                if review.attempts:
+                    for attempt in review.attempts:
+                        session.add(
+                            AIRequestLog(
+                                request_kind="MARKET_SUMMARY",
+                                provider=attempt.provider,
+                                model=attempt.model,
+                                status=attempt.status,
+                                input_tokens=attempt.input_tokens,
+                                output_tokens=attempt.output_tokens,
+                                estimated_cost_usd=attempt.estimated_cost_usd,
+                                latency_ms=attempt.latency_ms,
+                                error=attempt.error,
+                                fallback_used=attempt.fallback_used,
+                                usage_json=json.dumps(attempt.usage or {}, sort_keys=True),
+                                created_at=review.reviewed_at,
+                            )
+                        )
+                else:
+                    session.add(
+                        AIRequestLog(
+                            request_kind="MARKET_SUMMARY",
+                            provider=review.provider,
+                            model=review.model,
+                            status=review.status,
+                            input_tokens=review.input_tokens,
+                            output_tokens=review.output_tokens,
+                            estimated_cost_usd=review.estimated_cost_usd,
+                            latency_ms=review.latency_ms,
+                            error=review.error,
+                            fallback_used=review.fallback_used,
+                            usage_json=json.dumps(review.usage or {}, sort_keys=True),
+                            created_at=review.reviewed_at,
+                        )
                     )
-                )
         return MarketOverview(
             regime=regime,
             volatility=volatility,

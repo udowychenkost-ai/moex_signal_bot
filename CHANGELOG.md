@@ -10,9 +10,11 @@
 - Batch top-N/day ranking and `ticker+horizon+direction` cooldown before costly
   AI calls; intraday publication cap defaults to zero while its research cohort
   continues to be measured.
-- OpenAI Responses structured second opinion (`gpt-5-mini` configurable),
-  fail-closed WAIT behavior, strict no-invention prompt/schema, and request
-  tokens/cost/latency/error telemetry.
+- Provider-neutral structured second opinion with Gemini
+  `gemini-2.5-flash` default, one-shot `gemini-2.5-flash-lite` transient
+  fallback, retained OpenAI alternative, fail-closed `AI_NOT_REVIEWED / WAIT`,
+  strict no-invention prompt/schema and per-attempt provider/model/raw-usage/
+  token/cost/latency/error/fallback telemetry.
 - Frozen quant/AI experiment cohorts with lifecycle and actual R for approved,
   rejected, weak, cooldown and rank-suppressed candidates.
 - Strategy version `v2_ai_quality_filter`; all previous rows remain `v1` and
@@ -21,6 +23,8 @@
   preferences, idea section navigation and calculated market breadth/RS view.
 - Alembic revision `20260824_0010`; additive PostgreSQL/SQLite upgrade with no
   deletion or rewrite of existing `TradingIdea` rows.
+- Alembic revision `20260824_0011`; additive Gemini provider telemetry columns
+  with safe defaults and no rewrite or deletion of existing V1/V2 data.
 - Leakage-safe `app.research quality-v2` comparison: confirmation selection on
   TRAIN/VALIDATION and signal volume/WR/PF evaluation on untouched OOS TEST.
 - Horizon confirmation policy selected without TEST leakage: `1D=4` research,

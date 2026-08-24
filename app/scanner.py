@@ -166,6 +166,7 @@ class MarketScanner:
             "ai_wait": 0,
             "ai_rejected": 0,
             "ai_errors": 0,
+            "ai_fallbacks": 0,
             "ai_input_tokens": 0,
             "ai_output_tokens": 0,
             "ai_estimated_cost_usd": 0.0,
@@ -269,13 +270,13 @@ class MarketScanner:
                     )
                     continue
                 review = await self.ai_analyst.review(candidate, quality)
-                counters["ai_requests"] += 1
+                counters["ai_requests"] += review.request_count
+                counters["ai_fallbacks"] += int(review.fallback_used)
                 counters["ai_input_tokens"] += review.input_tokens
                 counters["ai_output_tokens"] += review.output_tokens
                 counters["ai_estimated_cost_usd"] += review.estimated_cost_usd
                 apply_ai_review(candidate, review)
-                if review.status != "OK":
-                    counters["ai_errors"] += 1
+                counters["ai_errors"] += review.error_count
                 if review.approved:
                     counters["ai_approved"] += 1
                     approved.append((candidate, quality, review))

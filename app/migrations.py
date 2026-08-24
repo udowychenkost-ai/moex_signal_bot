@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260824_0010"
+HEAD_REVISION = "20260824_0011"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -34,6 +34,8 @@ class SchemaSnapshot:
     snapshot_columns: frozenset[str]
     paper_columns: frozenset[str]
     user_columns: frozenset[str]
+    candidate_columns: frozenset[str]
+    ai_request_columns: frozenset[str]
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -78,6 +80,18 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                     if "telegram_users" in tables
                     else frozenset()
                 )
+                candidate_columns = (
+                    frozenset(
+                        column["name"] for column in inspector.get_columns("candidate_experiments")
+                    )
+                    if "candidate_experiments" in tables
+                    else frozenset()
+                )
+                ai_request_columns = (
+                    frozenset(column["name"] for column in inspector.get_columns("ai_request_logs"))
+                    if "ai_request_logs" in tables
+                    else frozenset()
+                )
                 return SchemaSnapshot(
                     tables=tables,
                     instrument_columns=instrument_columns,
@@ -85,6 +99,8 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                     snapshot_columns=snapshot_columns,
                     paper_columns=paper_columns,
                     user_columns=user_columns,
+                    candidate_columns=candidate_columns,
+                    ai_request_columns=ai_request_columns,
                 )
 
             return await connection.run_sync(inspect_schema)
@@ -142,14 +158,19 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
         and {"strategy_version", "quality_gate_result", "ai_verdict"}.issubset(columns)
         and v2_user_columns.issubset(snapshot.user_columns)
     ):
-        return HEAD_REVISION
+        if {"ai_fallback_used", "ai_usage_json"}.issubset(snapshot.candidate_columns) and {
+            "fallback_used",
+            "usage_json",
+        }.issubset(snapshot.ai_request_columns):
+            return HEAD_REVISION
+        return "20260824_0010"
     if (
         {"market_candles", "fundamental_reports"}.issubset(snapshot.tables)
         and "sector" in snapshot.instrument_columns
         and context_idea_columns.issubset(columns)
         and context_snapshot_columns.issubset(snapshot.snapshot_columns)
     ):
-        return HEAD_REVISION
+        return "20260820_0009"
     if {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(
         snapshot.tables
     ) and "observation_mode" in columns:

@@ -29,9 +29,12 @@ Edit `.env` and set at minimum:
   receive observation notifications;
 - one long random `POSTGRES_PASSWORD` and exactly the same URL-encoded password
 inside `DATABASE_URL`.
-- `OPENAI_API_KEY` for the configured `AI_MODEL=gpt-5-mini`. The V2 policy is
-  fail-closed: without a working key PASS candidates are recorded as `WAIT` and
-  no new V2 idea is published.
+- `GEMINI_API_KEY` for the default `AI_PROVIDER=gemini` and
+  `AI_MODEL=gemini-2.5-flash`. One transient primary failure uses exactly one
+  `AI_FALLBACK_MODEL=gemini-2.5-flash-lite` request. The V2 policy is
+  fail-closed: if review is unavailable, PASS candidates are recorded as
+  `AI_NOT_REVIEWED / WAIT` and no new V2 idea is published. OpenAI remains an
+  optional provider but is not the deployment default.
 
 Market context defaults are deployment-safe: `IMOEX` is mandatory and
 `RTSI,RGBITR,RVI` are secondary daily diagnostics. Keep
@@ -62,9 +65,11 @@ the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
 
-Revision `20260824_0010` only adds columns/tables and preserves every existing
-V1 `TradingIdea`. Existing rows are labeled `strategy_version=v1`; V2 forward
-statistics use `v2_ai_quality_filter` and do not mix the baseline.
+Revisions `20260824_0010` and `20260824_0011` only add columns/tables and
+preserve every existing V1/V2 `TradingIdea` and experiment row. Existing V1
+rows remain labeled `strategy_version=v1`; V2 forward statistics use
+`v2_ai_quality_filter` and do not mix the baseline. Revision `0011` adds only
+provider fallback/raw usage telemetry.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -93,9 +98,32 @@ In Telegram run:
 and successful ingestion/scanning/lifecycle/reporting jobs. A stale timeframe is
 shown explicitly and prevents new ideas for the affected ticker/horizon.
 The `idea_scanning` job details include QualityGate counts, AI requests/tokens/
-estimated cost/latency errors, cooldown suppressions and top-N suppressions.
+estimated cost/latency errors/fallbacks, cooldown suppressions and top-N
+suppressions.
 
 ## 4. Update and redeploy
+
+Before the first Gemini-default update, back up PostgreSQL as described below
+and preserve the current environment file:
+
+```bash
+cp .env ".env.pre-gemini-$(date -u +%Y%m%dT%H%M%SZ)"
+nano .env
+```
+
+Ensure the following values are present; keep all existing Telegram/PostgreSQL
+secrets and V2 thresholds unchanged:
+
+```env
+GEMINI_API_KEY=replace_with_real_key
+AI_PROVIDER=gemini
+AI_MODEL=gemini-2.5-flash
+AI_FALLBACK_MODEL=gemini-2.5-flash-lite
+AI_FILTER_ENABLED=true
+AI_ALLOW_UNREVIEWED_FALLBACK=false
+```
+
+Then update without deleting the database volume:
 
 ```bash
 git fetch origin
@@ -106,7 +134,13 @@ docker compose build --pull
 docker compose up -d --remove-orphans
 docker compose ps
 docker compose logs --tail=200 app
+docker compose exec app python -m app healthcheck
+docker compose exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 ```
+
+The expected Alembic revision is `20260824_0011`. Do not run `docker compose
+down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
 
 The app performs startup recovery from PostgreSQL: open and pending ideas remain
 in place, later candles continue their lifecycle, and the notification outbox

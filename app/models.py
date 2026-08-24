@@ -333,6 +333,8 @@ class CandidateExperiment(Base):
     ai_estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
     ai_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     ai_error: Mapped[str] = mapped_column(Text, default="")
+    ai_fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_usage_json: Mapped[str] = mapped_column(Text, default="{}")
     published: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     publish_reason: Mapped[str] = mapped_column(String(32), default="")
     published_idea_id: Mapped[int | None] = mapped_column(
@@ -381,6 +383,8 @@ class AIRequestLog(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(Text, default="")
+    fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    usage_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

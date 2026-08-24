@@ -57,7 +57,8 @@ Backtest получает historical candles из того же repository layer
 | `app/horizons.py` | Профили сроков и веса | Отдельную стратегию на горизонт |
 | `app/ideas.py` | Агрегация timeframes/factors, entry zone, вызов общего risk manager | Lifecycle после публикации |
 | `app/quality.py` | Детерминированный PASS/WEAK/REJECT, confirmations/conflicts/regime compatibility | LLM reasoning |
-| `app/ai_analyst.py` | Structured OpenAI second opinion, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
+| `app/ai_analyst.py` | Provider-neutral structured second opinion, Gemini fallback orchestration, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
+| `app/ai_providers.py` | Gemini/OpenAI HTTP contracts, exact model/usage/latency/error telemetry | QualityGate, scoring и решение о публикации |
 | `app/experiments.py` | Frozen candidate cohorts, cooldown, AI telemetry link и rejected lifecycle | Пользовательскую публикацию |
 | `app/idea_repository.py` | Единственность открытой идеи, material updates, version/dedup events | Анализ рынка |
 | `app/idea_tracker.py` | Активация, TP/SL, expiry, missed entry | Генерацию новой идеи |

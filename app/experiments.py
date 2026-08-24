@@ -80,12 +80,14 @@ def _review_values(review: AIReviewResult | None) -> dict[str, object]:
             "ai_estimated_cost_usd": 0.0,
             "ai_latency_ms": 0,
             "ai_error": "",
+            "ai_fallback_used": False,
+            "ai_usage_json": "{}",
         }
     analysis = review.analysis
     return {
         "ai_verdict": analysis.verdict,
-        "ai_score": analysis.ai_score,
-        "ai_confidence": analysis.confidence_in_analysis,
+        "ai_score": analysis.score,
+        "ai_confidence": analysis.analysis_confidence,
         "ai_bull_case": analysis.bull_case,
         "ai_bear_case": analysis.bear_case,
         "ai_key_risks": _json(analysis.key_risks),
@@ -101,6 +103,8 @@ def _review_values(review: AIReviewResult | None) -> dict[str, object]:
         "ai_estimated_cost_usd": review.estimated_cost_usd,
         "ai_latency_ms": review.latency_ms,
         "ai_error": review.error,
+        "ai_fallback_used": review.fallback_used,
+        "ai_usage_json": _json(review.usage or {}),
     }
 
 
@@ -160,21 +164,43 @@ async def save_candidate_experiment(
     session.add(row)
     await session.flush()
     if review is not None:
-        session.add(
-            AIRequestLog(
-                request_kind="CANDIDATE",
-                candidate_id=row.id,
-                provider=review.provider,
-                model=review.model,
-                status=review.status,
-                input_tokens=review.input_tokens,
-                output_tokens=review.output_tokens,
-                estimated_cost_usd=review.estimated_cost_usd,
-                latency_ms=review.latency_ms,
-                error=review.error,
-                created_at=review.reviewed_at or datetime.now(UTC),
+        if review.attempts:
+            for attempt in review.attempts:
+                session.add(
+                    AIRequestLog(
+                        request_kind="CANDIDATE",
+                        candidate_id=row.id,
+                        provider=attempt.provider,
+                        model=attempt.model,
+                        status=attempt.status,
+                        input_tokens=attempt.input_tokens,
+                        output_tokens=attempt.output_tokens,
+                        estimated_cost_usd=attempt.estimated_cost_usd,
+                        latency_ms=attempt.latency_ms,
+                        error=attempt.error,
+                        fallback_used=attempt.fallback_used,
+                        usage_json=_json(attempt.usage or {}),
+                        created_at=review.reviewed_at or datetime.now(UTC),
+                    )
+                )
+        else:
+            session.add(
+                AIRequestLog(
+                    request_kind="CANDIDATE",
+                    candidate_id=row.id,
+                    provider=review.provider,
+                    model=review.model,
+                    status=review.status,
+                    input_tokens=review.input_tokens,
+                    output_tokens=review.output_tokens,
+                    estimated_cost_usd=review.estimated_cost_usd,
+                    latency_ms=review.latency_ms,
+                    error=review.error,
+                    fallback_used=review.fallback_used,
+                    usage_json=_json(review.usage or {}),
+                    created_at=review.reviewed_at or datetime.now(UTC),
+                )
             )
-        )
     return row
 
 
