@@ -29,6 +29,9 @@ Edit `.env` and set at minimum:
   receive observation notifications;
 - one long random `POSTGRES_PASSWORD` and exactly the same URL-encoded password
 inside `DATABASE_URL`.
+- `OPENAI_API_KEY` for the configured `AI_MODEL=gpt-5-mini`. The V2 policy is
+  fail-closed: without a working key PASS candidates are recorded as `WAIT` and
+  no new V2 idea is published.
 
 Market context defaults are deployment-safe: `IMOEX` is mandatory and
 `RTSI,RGBITR,RVI` are secondary daily diagnostics. Keep
@@ -59,6 +62,10 @@ the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
 
+Revision `20260824_0010` only adds columns/tables and preserves every existing
+V1 `TradingIdea`. Existing rows are labeled `strategy_version=v1`; V2 forward
+statistics use `v2_ai_quality_filter` and do not mix the baseline.
+
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
 benchmark warm-up is complete; ideas are blocked during that state.
@@ -85,6 +92,8 @@ In Telegram run:
 `/status` must show `Database: OK`, `Scheduler: RUNNING`, a recent MOEX update,
 and successful ingestion/scanning/lifecycle/reporting jobs. A stale timeframe is
 shown explicitly and prevents new ideas for the affected ticker/horizon.
+The `idea_scanning` job details include QualityGate counts, AI requests/tokens/
+estimated cost/latency errors, cooldown suppressions and top-N suppressions.
 
 ## 4. Update and redeploy
 
@@ -102,6 +111,8 @@ docker compose logs --tail=200 app
 The app performs startup recovery from PostgreSQL: open and pending ideas remain
 in place, later candles continue their lifecycle, and the notification outbox
 prevents a previously delivered event from being sent twice.
+Open `candidate_experiments`, including AI-rejected rows, also resume lifecycle
+tracking so cohort outcomes are not lost after restart.
 
 ## 5. PostgreSQL backup and restore
 

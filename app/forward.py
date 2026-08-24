@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -55,6 +56,41 @@ EVENT_TITLES = {
 }
 
 
+def _idea_actions(idea_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧠 AI-анализ", callback_data=f"idea_ai:{idea_id}"),
+                InlineKeyboardButton(text="📊 Теханализ", callback_data=f"idea_tech:{idea_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="🏢 Фундаментал", callback_data=f"idea_fund:{idea_id}"),
+                InlineKeyboardButton(text="🌍 Рынок", callback_data=f"idea_market:{idea_id}"),
+            ],
+            [InlineKeyboardButton(text="📜 История идеи", callback_data=f"idea_history:{idea_id}")],
+        ]
+    )
+
+
+async def _send_bot_message(
+    bot: Bot,
+    chat_id: int,
+    message: str,
+    *,
+    idea_id: int | None = None,
+) -> None:
+    if idea_id is None:
+        await bot.send_message(chat_id, message)
+        return
+    try:
+        await bot.send_message(chat_id, message, reply_markup=_idea_actions(idea_id))
+    except TypeError as error:
+        # Lightweight test/dummy bots may intentionally expose the old two-argument API.
+        if "reply_markup" not in str(error):
+            raise
+        await bot.send_message(chat_id, message)
+
+
 def _format_time(value: datetime | None, timezone: str) -> str:
     if value is None:
         return "нет"
@@ -62,35 +98,48 @@ def _format_time(value: datetime | None, timezone: str) -> str:
 
 
 def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
-    rationale = "\n".join(f"• {escape(line)}" for line in idea.rationale.splitlines()[:5] if line)
+    rationale = "\n".join(f"• {escape(line)}" for line in idea.rationale.splitlines()[:3] if line)
     regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
+    ai_score = f"{idea.ai_score:.0f}/100" if idea.ai_score is not None else "не проверено"
+    risks = []
+    try:
+        risks = json.loads(idea.ai_key_risks or "[]")
+    except json.JSONDecodeError:
+        risks = []
+    risks_text = "\n".join(f"• {escape(str(item))}" for item in risks[:2]) or "• нет данных"
+    ai_summary = (
+        idea.ai_short_summary
+        if idea.ai_verdict in {"STRONG_APPROVE", "APPROVE", "WAIT", "REJECT"}
+        else "Идея не проходила AI second opinion."
+    )
     return (
-        "🆕 <b>НОВАЯ ИДЕЯ</b>\n\n"
+        "🔥 <b>СИЛЬНАЯ ИДЕЯ</b>\n🆕 НОВАЯ ИДЕЯ\n\n"
         f"ID: <code>{idea.id}</code>\n"
-        f"Direction: <b>{idea.direction}</b>\n"
-        f"Ticker: <b>{escape(idea.ticker)}</b>\n"
-        f"Инструмент: <b>{escape(idea.instrument_name)}</b>\n"
-        f"Текущая цена: <b>{idea.current_price:.2f} ₽</b>\n"
-        f"Entry zone: <b>{idea.entry_price_from:.2f}–{idea.entry_price_to:.2f} ₽</b>\n"
-        f"TP: <b>{idea.take_profit:.2f} ₽</b>\n"
-        f"SL: <b>{idea.stop_loss:.2f} ₽</b>\n"
-        f"Horizon: <b>{HORIZON_LABELS[idea.horizon]}</b>\n"
-        f"Режим: <b>{idea.observation_mode}</b>\n"
-        f"Signal strength: <b>{idea.confidence:.0f}%</b>\n"
+        f"{'📈' if idea.direction == 'BUY' else '📉'} <b>{idea.direction} — "
+        f"{escape(idea.ticker)}</b> · {escape(idea.instrument_name)}\n\n"
+        f"💰 Текущая цена: <b>{idea.current_price:.2f} ₽</b>\n"
+        f"🎯 Вход: <b>{idea.entry_price_from:.2f}–{idea.entry_price_to:.2f} ₽</b>\n"
+        f"✅ TP: <b>{idea.take_profit:.2f} ₽</b>\n"
+        f"🛑 SL: <b>{idea.stop_loss:.2f} ₽</b>\n\n"
+        f"⏱ Горизонт: <b>{HORIZON_LABELS[idea.horizon]}</b> · "
+        f"{idea.observation_mode}\n"
         f"R:R: <b>1:{idea.risk_reward_ratio:.2f}</b>\n"
-        f"Potential return: <b>+{idea.expected_return_pct:.2f}%</b>\n"
-        f"Potential risk: <b>−{idea.risk_pct:.2f}%</b>\n"
-        f"Статус: <b>{idea.status}</b>\n\n"
-        "<b>Рыночный контекст</b>\n"
-        f"{regime_icon} IMOEX: <b>{idea.market_regime or 'нет данных'}</b> · "
+        f"📊 Сила модели: <b>{(idea.final_quality_score or idea.confidence):.0f}/100</b>\n"
+        f"Потенциал: <b>+{idea.expected_return_pct:.2f}%</b> · "
+        f"риск <b>−{idea.risk_pct:.2f}%</b>\n\n"
+        f"🌍 IMOEX: {regime_icon} <b>{idea.market_regime or 'нет данных'}</b> · "
         f"vol {idea.market_volatility or 'n/a'}\n"
-        f"Относительная сила: <b>{escape(idea.relative_strength_label or 'недоступно')}</b>\n"
-        f"Объём: <b>{idea.volume_state or 'UNKNOWN'}</b> "
+        f"💪 Относительная сила: <b>{escape(idea.relative_strength_label or 'недоступно')}</b>\n"
+        f"📦 Объём: <b>{idea.volume_state or 'UNKNOWN'}</b> "
         f"({float(idea.volume_score or 0):+.0f}/100)\n"
-        f"Momentum extreme: <b>{float(idea.momentum_extreme_score or 0):+.0f}/100</b>\n"
-        f"Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
-        f"<b>Rationale</b>\n{rationale}\n\n"
-        f"Created at: {_format_time(idea.created_at, timezone)}\n\n"
+        f"📉 Momentum: <b>{float(idea.momentum_extreme_score or 0):+.0f}/100</b>\n"
+        f"🏢 Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
+        f"🧠 <b>AI VERDICT: {escape(idea.ai_verdict)}</b> — {ai_score}\n"
+        f"{escape(ai_summary or 'AI second opinion не выполнялся.')}\n"
+        f"{escape(idea.ai_why_now or '')}\n\n"
+        f"⚠️ <b>Основные риски</b>\n{risks_text}\n\n"
+        f"<b>Quant rationale</b>\n{rationale}\n\n"
+        f"Статус: <b>{idea.status}</b> · {_format_time(idea.created_at, timezone)}\n\n"
         "⚠️ Только наблюдение. Реальные сделки не выполняются."
     )
 
@@ -179,7 +228,9 @@ def _metric(value: float | None, *, suffix: str = "") -> str:
 def format_statistics(periods: tuple[PeriodStatistics, ...]) -> str:
     sections = ["📊 <b>FORWARD STATISTICS</b>"]
     for period in periods:
-        sections.append(f"\n<b>{period.label}</b>")
+        sections.append(
+            f"\n<b>{period.label}</b> · experiment <code>{escape(period.strategy_version)}</code>"
+        )
         for row in period.horizons:
             sample = " ⚠️ малая выборка" if row.small_sample else ""
             paper_pnl = (
@@ -195,6 +246,23 @@ def format_statistics(periods: tuple[PeriodStatistics, ...]) -> str:
                 f"PF: {_metric(row.profit_factor)}\n"
                 f"Average R: {_metric(row.average_r)} · Net paper P&L: {paper_pnl}"
             )
+        if period.experiment_cohorts:
+            sections.append("\n<b>Quant vs AI cohorts</b>")
+            for horizon in IdeaHorizon:
+                cohort_rows = [
+                    row for row in period.experiment_cohorts if row.horizon == horizon.value
+                ]
+                if not cohort_rows:
+                    continue
+                sections.append(f"<i>{HORIZON_LABELS[horizon.value]}</i>")
+                for row in cohort_rows:
+                    sample = " ⚠️ малая выборка" if row.small_sample else ""
+                    sections.append(
+                        f"{escape(row.cohort)}: {row.generated} generated · "
+                        f"{row.activated} activated · TP {row.tp}/SL {row.sl} · "
+                        f"WR {_metric(row.win_rate, suffix='%')} · "
+                        f"PF {_metric(row.profit_factor)} · R {_metric(row.average_r)}{sample}"
+                    )
     sections.append(
         "\n<i>Win rate = TP/(TP+SL). RESEARCH R не включает комиссии; "
         "PAPER P&L включает настроенные комиссии и проскальзывание.</i>"
@@ -260,6 +328,102 @@ def format_idea_history(history: IdeaHistory, *, timezone: str) -> str:
             "Snapshot immutable: да"
         )
     return "\n".join(line for line in lines if line)
+
+
+def format_ai_analysis(history: IdeaHistory) -> str:
+    idea = history.idea
+    risks = json.loads(idea.ai_key_risks or "[]")
+    invalidations = json.loads(idea.ai_invalidation_conditions or "[]")
+    return (
+        "🧠 <b>AI-анализ</b>\n\n"
+        f"Вердикт: <b>{escape(idea.ai_verdict)}</b> · "
+        f"оценка <b>{_metric(idea.ai_score)}/100</b>\n"
+        f"Уверенность в анализе: <b>{escape(idea.ai_confidence or 'n/a')}</b>\n\n"
+        f"<b>Почему идея интересна</b>\n{escape(idea.ai_bull_case or 'нет данных')}\n\n"
+        f"<b>Что против</b>\n{escape(idea.ai_bear_case or 'нет данных')}\n\n"
+        f"<b>Почему сейчас</b>\n{escape(idea.ai_why_now or 'нет данных')}\n\n"
+        f"<b>Главные риски</b>\n"
+        + ("\n".join(f"• {escape(str(item))}" for item in risks) or "• нет данных")
+        + "\n\n<b>Условия отмены</b>\n"
+        + (
+            "\n".join(f"• {escape(str(item))}" for item in invalidations)
+            or f"• {escape(idea.invalidation_reason)}"
+        )
+    )
+
+
+def format_technical_analysis(history: IdeaHistory) -> str:
+    snapshot = history.snapshot
+    if snapshot is None:
+        return "📊 <b>Теханализ</b>\n\nDecision-time snapshot недоступен."
+    factors = json.loads(snapshot.factor_scores or "{}")
+    components = factors.get("technical_components", {})
+    indicators = json.loads(snapshot.relevant_indicators or "{}")
+    primary = indicators.get(history.idea.primary_timeframe, {})
+    component_text = "\n".join(
+        f"• {escape(str(name))}: {float(value):+.1f}/100" for name, value in components.items()
+    )
+    return (
+        "📊 <b>Теханализ</b>\n\n"
+        f"Technical score: <b>{snapshot.technical_score:+.1f}/100</b>\n"
+        f"Подтверждений: <b>{snapshot.confirmation_count}</b>\n"
+        f"RSI: <b>{_metric(primary.get('rsi'))}</b> · "
+        f"ADX: <b>{_metric(primary.get('adx'))}</b>\n"
+        f"MACD histogram: <b>{_metric(primary.get('macd_histogram'))}</b>\n"
+        f"Volume ratio: <b>{_metric(primary.get('volume_ratio'))}</b> · "
+        f"ATR: <b>{_metric(snapshot.atr)}</b>\n\n"
+        f"<b>Компоненты</b>\n{component_text or 'нет данных'}"
+    )
+
+
+def format_fundamental_analysis(history: IdeaHistory) -> str:
+    snapshot = history.snapshot
+    if snapshot is None:
+        return "🏢 <b>Фундаментал</b>\n\nDecision-time snapshot недоступен."
+    components = json.loads(snapshot.fundamental_components or "{}")
+    publications = json.loads(snapshot.fundamental_publications or "[]")
+    component_text = "\n".join(
+        f"• {escape(str(name))}: {float(value):+.1f}/100" for name, value in components.items()
+    )
+    sources = "\n".join(
+        f"• {escape(str(item.get('report_period')))} · "
+        f"{escape(str(item.get('source')))} · available {escape(str(item.get('available_from')))}"
+        for item in publications
+    )
+    return (
+        "🏢 <b>Фундаментал</b>\n\n"
+        f"Score: <b>{snapshot.fundamental_score:+.1f}/100</b>\n"
+        f"Статус: <b>{escape(history.idea.fundamental_label)}</b>\n\n"
+        f"<b>Компоненты</b>\n{component_text or 'unavailable'}\n\n"
+        f"<b>Point-in-time источники</b>\n{sources or 'unavailable'}"
+    )
+
+
+def format_idea_market_analysis(history: IdeaHistory) -> str:
+    snapshot = history.snapshot
+    if snapshot is None:
+        return "🌍 <b>Рынок</b>\n\nDecision-time snapshot недоступен."
+    return (
+        "🌍 <b>Рынок в момент решения</b>\n\n"
+        f"IMOEX regime: <b>{escape(snapshot.regime or 'unavailable')}</b> "
+        f"({snapshot.market_regime_score:+.1f}/100)\n"
+        f"Volatility: <b>{escape(snapshot.market_volatility or 'unavailable')}</b>\n"
+        f"Relative strength: <b>{snapshot.relative_strength_score:+.1f}/100</b>\n"
+        f"Volume score: <b>{snapshot.volume_score:+.1f}/100</b>\n\n"
+        "Значения взяты из immutable decision-time snapshot."
+    )
+
+
+def format_lifecycle_history(history: IdeaHistory, *, timezone: str) -> str:
+    lines = ["📜 <b>История идеи</b>"]
+    for event in history.events:
+        price = f" @ {event.price:.2f} ₽" if event.price is not None else ""
+        lines.append(
+            f"• {_format_time(event.occurred_at, timezone)} · "
+            f"{escape(event.event_type)} → <b>{escape(event.to_status)}</b>{price}"
+        )
+    lines.append(_closed_result(history.idea, history.paper_trade))
+    return "\n".join(item for item in lines if item)
 
 
 class ForwardReportingService:
@@ -346,9 +510,6 @@ class ForwardReportingService:
             }
         counters = {"recipients": len(recipients), "sent": 0, "errors": 0}
         for telegram_id, user in recipients.items():
-            notifications_off = user is not None and user.report_frequency == "off"
-            if notifications_off and telegram_id not in self.settings.admin_chat_ids:
-                continue
             async with self.session_factory() as session:
                 sent_keys = set(
                     await session.scalars(
@@ -367,11 +528,32 @@ class ForwardReportingService:
                 idea = ideas.get(event.idea_id)
                 if idea is None:
                     continue
-                is_admin = telegram_id in self.settings.admin_chat_ids
-                if not is_admin and user is not None:
+                if user is not None:
+                    preference = {
+                        "CREATED": user.notify_new_idea,
+                        "ACTIVATED": user.notify_activation,
+                        "TP_HIT": user.notify_tp,
+                        "SL_HIT": user.notify_sl,
+                        "EXPIRED": user.notify_expiry,
+                        "ENTRY_MISSED": user.notify_expiry,
+                        "INVALIDATED": user.notify_expiry,
+                    }.get(event.event_type, True)
+                    if not preference:
+                        continue
+                    if (
+                        user.ai_filter_enabled
+                        and idea.strategy_version == self.settings.strategy_version
+                        and idea.ai_verdict not in {"STRONG_APPROVE", "APPROVE"}
+                    ):
+                        continue
                     if user.idea_horizon != "all" and user.idea_horizon != idea.horizon:
                         continue
-                    if idea.confidence < user.minimum_confidence:
+                    strength = (
+                        idea.final_quality_score
+                        if idea.strategy_version == self.settings.strategy_version
+                        else idea.confidence
+                    )
+                    if strength < user.minimum_confidence:
                         continue
                 message = (
                     format_new_idea(idea, timezone=self.settings.scheduler_timezone)
@@ -384,7 +566,12 @@ class ForwardReportingService:
                     )
                 )
                 try:
-                    await bot.send_message(telegram_id, message)
+                    await _send_bot_message(
+                        bot,
+                        telegram_id,
+                        message,
+                        idea_id=idea.id if event.event_type == "CREATED" else None,
+                    )
                     await self._mark_sent(
                         telegram_id,
                         key,
@@ -484,6 +671,9 @@ class ForwardReportingService:
         key = f"daily:{local.date().isoformat()}"
         counters = {"recipients": len(recipients), "sent": 0, "errors": 0}
         for telegram_id in recipients:
+            user = recipients[telegram_id]
+            if user is not None and not user.notify_daily_summary:
+                continue
             async with self.session_factory() as session:
                 exists = await session.scalar(
                     select(ForwardNotification.id).where(

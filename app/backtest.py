@@ -453,6 +453,7 @@ class BacktestEngine:
         fundamental_provider: (
             Callable[[str, datetime], FundamentalScoreData | None] | None
         ) = None,
+        candidate_filter: Callable[[TradingIdeaData], bool] | None = None,
     ) -> BacktestResult:
         selected_profile = profile or get_horizon_profile(horizon)
         if selected_profile.horizon != horizon:
@@ -554,6 +555,8 @@ class BacktestEngine:
                 ),
             )
             if candidate is None or candidate.status == IdeaStatus.INVALIDATED:
+                continue
+            if candidate_filter is not None and not candidate_filter(candidate):
                 continue
 
             # The signal is only known after the decision candle closes. Even when

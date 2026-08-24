@@ -40,6 +40,26 @@ class ReportFrequency(StrEnum):
     OFF = "off"
 
 
+class QualityGateDecision(StrEnum):
+    PASS = "PASS"
+    WEAK = "WEAK"
+    REJECT = "REJECT"
+
+
+class AIVerdict(StrEnum):
+    STRONG_APPROVE = "STRONG_APPROVE"
+    APPROVE = "APPROVE"
+    WAIT = "WAIT"
+    REJECT = "REJECT"
+    NOT_REQUESTED = "NOT_REQUESTED"
+
+
+class AIConfidence(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 @dataclass(frozen=True, slots=True)
 class HorizonProfile:
     horizon: IdeaHorizon
@@ -340,6 +360,25 @@ class TradingIdeaData:
     fundamental_components: dict[str, float] = field(default_factory=dict)
     fundamental_publications: list[dict[str, object]] = field(default_factory=list)
     fundamental_label: str = "нет данных"
+    daily_turnover: float | None = None
+    quality_gate_result: str = "LEGACY"
+    final_quality_score: float = 0.0
+    supporting_factors: list[str] = field(default_factory=list)
+    contradicting_factors: list[str] = field(default_factory=list)
+    confirmation_count: int = 0
+    strategy_version: str = "v1"
+    ai_verdict: str = AIVerdict.NOT_REQUESTED.value
+    ai_score: float | None = None
+    ai_confidence: str | None = None
+    ai_bull_case: str = ""
+    ai_bear_case: str = ""
+    ai_key_risks: list[str] = field(default_factory=list)
+    ai_why_now: str = ""
+    ai_invalidation_conditions: list[str] = field(default_factory=list)
+    ai_short_summary: str = ""
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_reviewed_at: datetime | None = None
 
     @property
     def entry_state(self) -> EntryState:

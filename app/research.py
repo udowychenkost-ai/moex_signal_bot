@@ -13,6 +13,7 @@ from app.domain import IdeaHorizon
 from app.logging_config import configure_logging
 from app.migrations import migrate_database
 from app.moex import MoexClient
+from app.quality_research import run_quality_comparison, write_quality_comparison
 from app.research_data import ResearchDataService, load_research_config
 from app.research_runner import ResearchRunner, write_research_outputs
 
@@ -140,6 +141,39 @@ async def run_ablation(
         await engine.dispose()
 
 
+async def run_v2_quality(
+    *,
+    tickers: list[str] | None = None,
+    horizons: list[str] | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    config = load_research_config(settings.research_config_path)
+    selected_tickers = tuple(dict.fromkeys(item.upper() for item in tickers)) if tickers else None
+    selected_horizons = (
+        tuple(IdeaHorizon(item.upper()) for item in horizons)
+        if horizons
+        else (
+            IdeaHorizon.SWING_5D,
+            IdeaHorizon.POSITION_1M,
+            IdeaHorizon.INTRADAY_1D,
+        )
+    )
+    await migrate_database(settings.research_database_url)
+    engine, session_factory = create_engine_and_session(settings.research_database_url)
+    try:
+        payload = await run_quality_comparison(
+            ResearchRunner(settings, config, session_factory),
+            settings,
+            tickers=selected_tickers,
+            horizons=selected_horizons,
+        )
+        write_quality_comparison(Path(settings.research_output_dir), payload)
+        return payload
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX validation and calibration research")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -166,6 +200,16 @@ def main() -> None:
         "--horizons",
         nargs="+",
         choices=[IdeaHorizon.POSITION_1M.value, IdeaHorizon.SWING_5D.value],
+    )
+    quality = subparsers.add_parser(
+        "quality-v2",
+        help="calibrate confirmations and compare V1 quant vs V2 QualityGate on OOS",
+    )
+    quality.add_argument("--tickers", nargs="+")
+    quality.add_argument(
+        "--horizons",
+        nargs="+",
+        choices=[item.value for item in IdeaHorizon],
     )
     args = parser.parse_args()
 
@@ -218,6 +262,21 @@ def main() -> None:
                     "horizons": list(result["horizons"]),
                     "fundamental_coverage": result["fundamental_coverage"],
                     "output": str(Path(get_settings().research_output_dir) / "ablation_oos.json"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    elif args.command == "quality-v2":
+        result = asyncio.run(run_v2_quality(tickers=args.tickers, horizons=args.horizons))
+        print(
+            json.dumps(
+                {
+                    "dataset": result["dataset"],
+                    "horizons": list(result["horizons"]),
+                    "output": str(
+                        Path(get_settings().research_output_dir) / "v2_quality_comparison.json"
+                    ),
                 },
                 ensure_ascii=False,
                 indent=2,

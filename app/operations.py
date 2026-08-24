@@ -14,6 +14,7 @@ from app.config import Settings
 from app.domain import IdeaHorizon, IdeaStatus
 from app.migrations import HEAD_REVISION
 from app.models import (
+    CandidateExperiment,
     JobRunState,
     PaperTrade,
     TradingIdea,
@@ -44,6 +45,23 @@ class PeriodStatistics:
     label: str
     start_at: datetime | None
     horizons: tuple[HorizonStatistics, ...]
+    strategy_version: str = "v1"
+    experiment_cohorts: tuple[ExperimentCohortStatistics, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentCohortStatistics:
+    horizon: str
+    cohort: str
+    generated: int
+    activated: int
+    tp: int
+    sl: int
+    expired: int
+    win_rate: float | None
+    profit_factor: float | None
+    average_r: float | None
+    small_sample: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,8 +213,21 @@ class OperationalService:
     async def statistics(self, *, now: datetime | None = None) -> tuple[PeriodStatistics, ...]:
         checked_at = aware_utc(now or datetime.now(UTC))
         async with self.session_factory() as session:
-            ideas = list(await session.scalars(select(TradingIdea)))
+            ideas = list(
+                await session.scalars(
+                    select(TradingIdea).where(
+                        TradingIdea.strategy_version == self.settings.strategy_version
+                    )
+                )
+            )
             trades = list(await session.scalars(select(PaperTrade)))
+            experiments = list(
+                await session.scalars(
+                    select(CandidateExperiment).where(
+                        CandidateExperiment.strategy_version == self.settings.strategy_version
+                    )
+                )
+            )
         trade_by_idea = {trade.idea_id: trade for trade in trades}
         periods = (
             ("7 дней", checked_at - timedelta(days=7)),
@@ -209,6 +240,7 @@ class OperationalService:
                 idea for idea in ideas if start_at is None or aware_utc(idea.created_at) >= start_at
             ]
             horizon_rows: list[HorizonStatistics] = []
+            experiment_rows: list[ExperimentCohortStatistics] = []
             for horizon in IdeaHorizon:
                 rows = [idea for idea in selected if idea.horizon == horizon.value]
                 activated_rows = [idea for idea in rows if idea.activated_at is not None]
@@ -249,7 +281,63 @@ class OperationalService:
                         small_sample=len(activated_rows) < self.settings.small_sample_threshold,
                     )
                 )
-            result.append(PeriodStatistics(label, start_at, tuple(horizon_rows)))
+                candidate_rows = [
+                    row
+                    for row in experiments
+                    if row.horizon == horizon.value
+                    and (start_at is None or aware_utc(row.decision_at) >= start_at)
+                ]
+                cohorts = (
+                    ("ALL QUANT CANDIDATES", candidate_rows),
+                    (
+                        "AI APPROVED",
+                        [
+                            row
+                            for row in candidate_rows
+                            if row.ai_verdict in {"STRONG_APPROVE", "APPROVE"}
+                        ],
+                    ),
+                    (
+                        "AI REJECTED",
+                        [row for row in candidate_rows if row.ai_verdict == "REJECT"],
+                    ),
+                )
+                for cohort_name, cohort_rows in cohorts:
+                    r_values = [row.actual_r for row in cohort_rows if row.actual_r is not None]
+                    gains = sum(value for value in r_values if value > 0)
+                    losses = abs(sum(value for value in r_values if value < 0))
+                    tp_count = sum(row.status == IdeaStatus.TP_HIT.value for row in cohort_rows)
+                    sl_count = sum(row.status == IdeaStatus.SL_HIT.value for row in cohort_rows)
+                    decisive = tp_count + sl_count
+                    activated_count = sum(row.activated_at is not None for row in cohort_rows)
+                    experiment_rows.append(
+                        ExperimentCohortStatistics(
+                            horizon=horizon.value,
+                            cohort=cohort_name,
+                            generated=len(cohort_rows),
+                            activated=activated_count,
+                            tp=tp_count,
+                            sl=sl_count,
+                            expired=sum(
+                                row.status == IdeaStatus.EXPIRED.value for row in cohort_rows
+                            ),
+                            win_rate=tp_count / decisive * 100 if decisive else None,
+                            profit_factor=(
+                                gains / losses if losses else (float("inf") if gains else None)
+                            ),
+                            average_r=(sum(r_values) / len(r_values) if r_values else None),
+                            small_sample=(activated_count < self.settings.small_sample_threshold),
+                        )
+                    )
+            result.append(
+                PeriodStatistics(
+                    label,
+                    start_at,
+                    tuple(horizon_rows),
+                    strategy_version=self.settings.strategy_version,
+                    experiment_cohorts=tuple(experiment_rows),
+                )
+            )
         return tuple(result)
 
     async def idea_history(self, idea_id: int) -> IdeaHistory | None:

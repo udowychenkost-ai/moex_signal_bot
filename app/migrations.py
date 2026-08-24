@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260820_0009"
+HEAD_REVISION = "20260824_0010"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -33,6 +33,7 @@ class SchemaSnapshot:
     idea_columns: frozenset[str]
     snapshot_columns: frozenset[str]
     paper_columns: frozenset[str]
+    user_columns: frozenset[str]
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -72,12 +73,18 @@ async def _schema_snapshot(database_url: str) -> SchemaSnapshot:
                     if "paper_trades" in tables
                     else frozenset()
                 )
+                user_columns = (
+                    frozenset(column["name"] for column in inspector.get_columns("telegram_users"))
+                    if "telegram_users" in tables
+                    else frozenset()
+                )
                 return SchemaSnapshot(
                     tables=tables,
                     instrument_columns=instrument_columns,
                     idea_columns=idea_columns,
                     snapshot_columns=snapshot_columns,
                     paper_columns=paper_columns,
+                    user_columns=user_columns,
                 )
 
             return await connection.run_sync(inspect_schema)
@@ -121,6 +128,21 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
         "fundamental_components",
         "fundamental_publications",
     }
+    v2_user_columns = {
+        "ai_filter_enabled",
+        "notify_new_idea",
+        "notify_activation",
+        "notify_tp",
+        "notify_sl",
+        "notify_expiry",
+        "notify_daily_summary",
+    }
+    if (
+        {"candidate_experiments", "ai_request_logs"}.issubset(snapshot.tables)
+        and {"strategy_version", "quality_gate_result", "ai_verdict"}.issubset(columns)
+        and v2_user_columns.issubset(snapshot.user_columns)
+    ):
+        return HEAD_REVISION
     if (
         {"market_candles", "fundamental_reports"}.issubset(snapshot.tables)
         and "sector" in snapshot.instrument_columns

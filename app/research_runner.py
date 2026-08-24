@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis import TechnicalFeatures
 from app.backtest import BacktestEngine, BacktestResult, HistoryIndex
 from app.config import Settings
-from app.domain import CandleData, IdeaHorizon, MarketContextData
+from app.domain import CandleData, IdeaHorizon, MarketContextData, TradingIdeaData
 from app.horizons import get_horizon_profile
 from app.models import FundamentalReport, Instrument
 from app.observation import completed_candles
@@ -226,6 +227,10 @@ class ResearchRunner:
         horizon: IdeaHorizon,
         instruments: list[ResearchInstrument],
         split: EvaluationSplit,
+        candidate_filter_factory: (
+            Callable[[ResearchInstrument], Callable[[TradingIdeaData], bool]] | None
+        ) = None,
+        include_diagnostic_market_context: bool = False,
     ) -> BacktestResult:
         if not instruments:
             raise RuntimeError(f"no research instruments available for {horizon.value}")
@@ -247,7 +252,16 @@ class ResearchRunner:
                 profile=profile,
                 feature_provider=instrument.provide_features,
                 prepared_indexes=instrument.indexes_by_timeframe,
-                market_context_provider=(instrument.provide_market_context if contextual else None),
+                market_context_provider=(
+                    instrument.provide_market_context
+                    if contextual or include_diagnostic_market_context
+                    else None
+                ),
+                candidate_filter=(
+                    candidate_filter_factory(instrument)
+                    if candidate_filter_factory is not None
+                    else None
+                ),
             )
 
         worker_count = min(self.settings.research_workers, len(instruments))

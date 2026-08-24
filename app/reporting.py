@@ -105,9 +105,11 @@ def format_best_ideas(ideas: list[TradingIdea]) -> str:
         sections.append(f"\n<b>{HORIZON_LABELS[horizon.value]}</b>")
         for index, idea in enumerate(selected, start=1):
             action = "BUY" if idea.direction == IdeaDirection.BUY.value else "SELL"
+            strength = idea.final_quality_score or idea.confidence
+            ai = f" · AI {idea.ai_score:.0f}/100" if idea.ai_score is not None else ""
             sections.append(
-                f"{index}. <b>{action} {escape(idea.ticker)}</b> — {idea.confidence:.0f}% · "
-                f"{STATUS_LABELS[idea.status]}"
+                f"{index}. <b>{action} {escape(idea.ticker)}</b> — {strength:.0f}/100{ai} · "
+                f"{STATUS_LABELS[idea.status]} · {idea.observation_mode}"
             )
     return "\n".join(sections)
 
@@ -118,17 +120,29 @@ class ReportingService:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         timezone: str = "Europe/Moscow",
+        strategy_version: str | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.timezone = timezone
+        self.strategy_version = strategy_version
 
-    async def best_for_user(self, user: TelegramUser, *, limit: int = 15) -> list[TradingIdea]:
+    async def best_for_user(
+        self,
+        user: TelegramUser,
+        *,
+        limit: int = 15,
+        horizon: str | None = None,
+        created_after: datetime | None = None,
+    ) -> list[TradingIdea]:
         async with self.session_factory() as session:
             return await list_open_ideas(
                 session,
-                horizon=user.idea_horizon,
+                horizon=horizon or user.idea_horizon,
                 minimum_confidence=user.minimum_confidence,
                 limit=limit,
+                strategy_version=self.strategy_version,
+                created_after=created_after,
+                ai_approved_only=user.ai_filter_enabled and self.strategy_version is not None,
             )
 
     async def idea_details(self, idea_id: int) -> TradingIdea | None:
@@ -149,6 +163,8 @@ class ReportingService:
                     telegram_id=user.telegram_id,
                     horizon=user.idea_horizon,
                     minimum_confidence=user.minimum_confidence,
+                    strategy_version=self.strategy_version,
+                    ai_approved_only=(user.ai_filter_enabled and self.strategy_version is not None),
                 )
             try:
                 if ideas:

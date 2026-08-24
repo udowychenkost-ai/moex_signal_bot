@@ -23,6 +23,14 @@ Analysis Engine → Scoring Engine → SignalService
                               │             │
                               │       shared Risk Manager
                               ▼
+                     Quant candidate (detached)
+                              │
+                  QualityGate + conflicts + ranking
+                              │
+                 CandidateExperiment (immutable input)
+                              │ PASS
+                    AIAnalystService (structured)
+                              │ APPROVE
                          Idea Repository
                               │
                               ▼
@@ -48,6 +56,9 @@ Backtest получает historical candles из того же repository layer
 | `app/signals.py` | Один внутренний `GeneratedSignal`, журнал сигналов | Пользовательскую торговую идею |
 | `app/horizons.py` | Профили сроков и веса | Отдельную стратегию на горизонт |
 | `app/ideas.py` | Агрегация timeframes/factors, entry zone, вызов общего risk manager | Lifecycle после публикации |
+| `app/quality.py` | Детерминированный PASS/WEAK/REJECT, confirmations/conflicts/regime compatibility | LLM reasoning |
+| `app/ai_analyst.py` | Structured OpenAI second opinion, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
+| `app/experiments.py` | Frozen candidate cohorts, cooldown, AI telemetry link и rejected lifecycle | Пользовательскую публикацию |
 | `app/idea_repository.py` | Единственность открытой идеи, material updates, version/dedup events | Анализ рынка |
 | `app/idea_tracker.py` | Активация, TP/SL, expiry, missed entry | Генерацию новой идеи |
 | `app/reporting.py` | Фильтры пользователя, формат, расписание доставки, notification dedup | Market scan |
@@ -73,6 +84,22 @@ BUY/SELL/HOLD, ATR, уровни и объяснения. Он может хра
 горизонт, entry zone, TP/SL, confidence, expected return/risk/R:R, rationale,
 invalidation и lifecycle. В БД допускается только одна открытая идея на
 `ticker + horizon`. Смена направления отменяет предыдущую идею.
+
+`CandidateExperiment` создаётся для любого quant BUY/SELL candidate до решения о
+публикации. Его decision snapshot и quant/quality/AI результаты не
+перезаписываются. Собственный tracker продолжает pending/active lifecycle даже
+для AI REJECT, поэтому `/stats` сравнивает actual outcomes, а не только решения
+модели.
+
+```text
+Quant candidate
+  ├─ Quality REJECT/WEAK ───────────────► research cohort only
+  └─ Quality PASS
+       ├─ cooldown/rank limit ──────────► research cohort only
+       └─ structured AI review
+            ├─ WAIT/REJECT ─────────────► research cohort only
+            └─ APPROVE/STRONG_APPROVE ─► TradingIdea + Telegram
+```
 
 Факторная оценка хранит `technical_score`, `fundamental_score`, `news_score` и
 `total_score`. Сейчас внешний источник есть только у technical. Вес отсутствующих

@@ -243,6 +243,9 @@ def build_trading_idea(
     factor_scores: dict[str, object] = {
         timeframe: by_timeframe[timeframe].factor_scores for timeframe in available
     }
+    factor_scores["timeframe_scores"] = {
+        timeframe: round(by_timeframe[timeframe].technical_score, 4) for timeframe in available
+    }
     factor_scores["technical_components"] = technical_components
     factor_scores["factor_mix"] = {name: round(value, 4) for name, value in factor_values.items()}
     relevant_indicators = {
@@ -312,11 +315,11 @@ class TradingIdeaGenerator:
         self.freshness = freshness
         self.fundamentals = fundamentals
 
-    async def generate(
+    async def generate_candidate(
         self,
         ticker: str,
         horizon: IdeaHorizon,
-    ) -> IdeaUpsertResult | None:
+    ) -> TradingIdeaData | None:
         ticker = ticker.upper()
         profile = get_horizon_profile(horizon)
         if self.freshness is not None:
@@ -369,6 +372,10 @@ class TradingIdeaGenerator:
         )
         if candidate is None or candidate.status == IdeaStatus.INVALIDATED:
             return None
+        candidate.daily_turnover = instrument.daily_turnover
+        return candidate
+
+    async def persist_candidate(self, candidate: TradingIdeaData) -> IdeaUpsertResult:
         async with self.session_factory() as session, session.begin():
             return await create_or_update_idea(
                 session,
@@ -376,3 +383,14 @@ class TradingIdeaGenerator:
                 material_hash=idea_material_hash(candidate),
                 confidence_delta=self.settings.idea_material_confidence_delta,
             )
+
+    async def generate(
+        self,
+        ticker: str,
+        horizon: IdeaHorizon,
+    ) -> IdeaUpsertResult | None:
+        """Compatibility path; V2 scanner calls generate_candidate then its filters."""
+        candidate = await self.generate_candidate(ticker, horizon)
+        if candidate is None:
+            return None
+        return await self.persist_candidate(candidate)

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     default_risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10)
     idea_minimum_confidence: float = Field(default=60.0, ge=50, le=95)
     idea_material_confidence_delta: float = Field(default=7.5, ge=1, le=50)
-    default_report_frequency: Literal["hourly", "3h", "daily", "strong", "off"] = "hourly"
+    default_report_frequency: Literal["hourly", "3h", "daily", "strong", "off"] = "strong"
     default_idea_horizon: Literal["INTRADAY_1D", "SWING_5D", "POSITION_1M", "all"] = "all"
     default_minimum_confidence: float = Field(default=70.0, ge=50, le=95)
     paper_account_size: float = Field(default=1_000_000.0, gt=0)
@@ -92,6 +92,43 @@ class Settings(BaseSettings):
     market_context_enabled: bool = True
     fundamental_enabled: bool = True
     fundamental_json_path: str = "fundamentals/official.json"
+
+    strategy_version: str = "v2_ai_quality_filter"
+    quality_gate_enabled: bool = True
+    quality_min_technical_score: float = Field(default=35.0, ge=0, le=100)
+    quality_min_total_score: float = Field(default=35.0, ge=0, le=100)
+    intraday_quality_min_confirmations: int = Field(default=4, ge=1, le=7)
+    swing_quality_min_confirmations: int = Field(default=5, ge=1, le=7)
+    position_quality_min_confirmations: int = Field(default=5, ge=1, le=7)
+    quality_min_timeframe_confirmations: int = Field(default=2, ge=1, le=6)
+    quality_confirmation_score: float = Field(default=10.0, ge=0, le=100)
+    quality_conflict_score: float = Field(default=15.0, ge=0, le=100)
+    quality_max_conflicts: int = Field(default=2, ge=0, le=7)
+    quality_min_volume_ratio: float = Field(default=1.0, ge=0)
+    quality_min_daily_turnover: float = Field(default=25_000_000.0, ge=0)
+    quality_strong_regime_score: float = Field(default=50.0, ge=0, le=100)
+    quality_regime_override_score: float = Field(default=40.0, ge=0, le=100)
+    quality_ai_candidates_per_horizon: int = Field(default=5, ge=1, le=50)
+    intraday_max_new_ideas_per_scan: int = Field(default=0, ge=0, le=100)
+    swing_max_new_ideas_per_scan: int = Field(default=3, ge=0, le=100)
+    position_max_new_ideas_per_scan: int = Field(default=3, ge=0, le=100)
+    intraday_max_new_ideas_per_day: int = Field(default=0, ge=0, le=500)
+    swing_max_new_ideas_per_day: int = Field(default=5, ge=0, le=500)
+    position_max_new_ideas_per_day: int = Field(default=5, ge=0, le=500)
+    intraday_cooldown_hours: int = Field(default=24, ge=0, le=24 * 365)
+    swing_cooldown_hours: int = Field(default=72, ge=0, le=24 * 365)
+    position_cooldown_hours: int = Field(default=168, ge=0, le=24 * 365)
+
+    ai_filter_enabled: bool = True
+    ai_allow_unreviewed_fallback: bool = False
+    ai_provider: Literal["openai"] = "openai"
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-5-mini"
+    ai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    ai_max_output_tokens: int = Field(default=700, ge=100, le=4_000)
+    ai_input_cost_per_million: float = Field(default=0.25, ge=0)
+    ai_output_cost_per_million: float = Field(default=2.0, ge=0)
 
     @field_validator("default_timeframe")
     @classmethod
@@ -190,6 +227,38 @@ class Settings(BaseSettings):
         if self.market_benchmark.upper() not in symbols:
             symbols.insert(0, self.market_benchmark.upper())
         return list(dict.fromkeys(symbols))
+
+    def max_new_ideas_per_scan(self, horizon: IdeaHorizon | str) -> int:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_max_new_ideas_per_scan,
+            IdeaHorizon.SWING_5D: self.swing_max_new_ideas_per_scan,
+            IdeaHorizon.POSITION_1M: self.position_max_new_ideas_per_scan,
+        }[selected]
+
+    def minimum_confirmations(self, horizon: IdeaHorizon | str) -> int:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_quality_min_confirmations,
+            IdeaHorizon.SWING_5D: self.swing_quality_min_confirmations,
+            IdeaHorizon.POSITION_1M: self.position_quality_min_confirmations,
+        }[selected]
+
+    def max_new_ideas_per_day(self, horizon: IdeaHorizon | str) -> int:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_max_new_ideas_per_day,
+            IdeaHorizon.SWING_5D: self.swing_max_new_ideas_per_day,
+            IdeaHorizon.POSITION_1M: self.position_max_new_ideas_per_day,
+        }[selected]
+
+    def idea_cooldown_hours(self, horizon: IdeaHorizon | str) -> int:
+        selected = horizon if isinstance(horizon, IdeaHorizon) else IdeaHorizon(horizon)
+        return {
+            IdeaHorizon.INTRADAY_1D: self.intraday_cooldown_hours,
+            IdeaHorizon.SWING_5D: self.swing_cooldown_hours,
+            IdeaHorizon.POSITION_1M: self.position_cooldown_hours,
+        }[selected]
 
 
 @lru_cache

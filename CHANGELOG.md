@@ -4,6 +4,29 @@
 
 ### Added
 
+- V2 `QualityGateResult(PASS/WEAK/REJECT)` with directional technical/total
+  floors, liquidity, volume, timeframe coverage, independent confirmations,
+  explicit contradictory factors and strong-regime BUY/SELL rejection.
+- Batch top-N/day ranking and `ticker+horizon+direction` cooldown before costly
+  AI calls; intraday publication cap defaults to zero while its research cohort
+  continues to be measured.
+- OpenAI Responses structured second opinion (`gpt-5-mini` configurable),
+  fail-closed WAIT behavior, strict no-invention prompt/schema, and request
+  tokens/cost/latency/error telemetry.
+- Frozen quant/AI experiment cohorts with lifecycle and actual R for approved,
+  rejected, weak, cooldown and rank-suppressed candidates.
+- Strategy version `v2_ai_quality_filter`; all previous rows remain `v1` and
+  statistics no longer mix the two experiments.
+- Six-button Telegram main menu, button settings, per-event notification
+  preferences, idea section navigation and calculated market breadth/RS view.
+- Alembic revision `20260824_0010`; additive PostgreSQL/SQLite upgrade with no
+  deletion or rewrite of existing `TradingIdea` rows.
+- Leakage-safe `app.research quality-v2` comparison: confirmation selection on
+  TRAIN/VALIDATION and signal volume/WR/PF evaluation on untouched OOS TEST.
+- Horizon confirmation policy selected without TEST leakage: `1D=4` research,
+  `5D=5`, `1M=5`; unseen volume fell 79.86%/71.37% for SWING/POSITION and
+  POSITION PF improved from 1.139 to 1.297 (SWING remains negative research).
+
 - LIVE OBSERVATION / FORWARD PAPER runtime with the fixed policy
   `INTRADAY_1D=RESEARCH`, `SWING_5D=RESEARCH`, `POSITION_1M=PAPER`.
 - Independent ingestion, idea-scanning, lifecycle/paper, Telegram-dispatch and

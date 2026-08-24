@@ -479,7 +479,7 @@ def contextual_component_scores(
             price >= features.previous_close,
             levels > 0,
             volume > 0,
-            features.previous_rsi is not None and features.rsi > features.previous_rsi,
+            features.previous_rsi is not None and features.rsi > features.previous_rsi + 1e-6,
         )
     )
     rolling_over = sum(
@@ -488,7 +488,7 @@ def contextual_component_scores(
             price <= features.previous_close,
             levels < 0,
             volume < 0,
-            features.previous_rsi is not None and features.rsi < features.previous_rsi,
+            features.previous_rsi is not None and features.rsi < features.previous_rsi - 1e-6,
         )
     )
     oversold_score = oversold * max(0.0, (recovering - 1) / 4)

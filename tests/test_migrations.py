@@ -68,7 +68,67 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "momentum_extreme_score",
     }.issubset(idea_columns)
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260820_0009",)
+    assert {"candidate_experiments", "ai_request_logs"}.issubset(tables)
+    assert {"ai_filter_enabled", "notify_sl", "notify_daily_summary"}.issubset(user_columns)
+    assert {"strategy_version", "quality_gate_result", "ai_verdict"}.issubset(idea_columns)
+    assert revision == ("20260824_0010",)
+
+
+def test_v2_upgrade_preserves_existing_trading_idea_as_v1(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-v1.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    config = migration_config(database_url)
+    command.upgrade(config, "20260820_0009")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO instruments (
+                secid, board_id, instrument_type, short_name, lot_size,
+                echelon, is_active, updated_at, sector
+            ) VALUES ('SBER', 'TQBR', 'stock', 'Сбербанк', 10, 1, 1,
+                      '2026-08-20 10:00:00', 'Financials')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO trading_ideas (
+                ticker, instrument_name, direction, horizon, primary_timeframe,
+                entry_price_from, entry_price_to, current_price, take_profit,
+                stop_loss, confidence, expected_return_pct, risk_pct,
+                risk_reward_ratio, rationale, invalidation_reason, status,
+                source_timeframes, source_candle_begin, material_hash, version,
+                created_at, updated_at, expires_at, last_evaluated_at,
+                technical_score, fundamental_score, news_score, total_score
+            ) VALUES (
+                'SBER', 'Сбербанк', 'BUY', 'POSITION_1M', '1d',
+                250, 255, 257, 280, 240, 75, 9, 6, 2,
+                'baseline rationale', 'close below stop', 'PENDING_ENTRY',
+                '1d,1w', '2026-08-20 00:00:00', 'legacy-hash', 1,
+                '2026-08-20 10:00:00', '2026-08-20 10:00:00',
+                '2026-09-20 10:00:00', '2026-08-20 00:00:00',
+                50, 0, 0, 50
+            )
+            """
+        )
+        connection.commit()
+
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT ticker, rationale, strategy_version, quality_gate_result,
+                   ai_verdict
+            FROM trading_ideas
+            """
+        ).fetchone()
+    assert row == (
+        "SBER",
+        "baseline rationale",
+        "v1",
+        "LEGACY",
+        "NOT_REQUESTED",
+    )
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -88,7 +148,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260820_0009",)
+    assert revision == ("20260824_0010",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -99,7 +159,7 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260820_0009",)
+    assert revision == ("20260824_0010",)
 
 
 async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
@@ -115,7 +175,7 @@ async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260820_0009",)
+    assert revision == ("20260824_0010",)
 
 
 async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -> None:
@@ -134,7 +194,7 @@ async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(tables)
-    assert revision == ("20260820_0009",)
+    assert revision == ("20260824_0010",)
 
 
 async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -> None:
@@ -153,4 +213,4 @@ async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"market_candles", "fundamental_reports"}.issubset(tables)
-    assert revision == ("20260820_0009",)
+    assert revision == ("20260824_0010",)

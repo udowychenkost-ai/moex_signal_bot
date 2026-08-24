@@ -28,9 +28,17 @@
   `CANCELLED` и `INVALIDATED`, с полной историей событий;
 - защита от ложного результата: идея не считается активированной или выигрышной,
   если цена не вошла в entry zone;
-- Telegram-меню «Лучшие идеи / Мои идеи / Настройки», компактная карточка и
-  отдельная кнопка «Подробнее»;
-- пользовательские фильтры: частота, горизонт, риск и минимальный confidence;
+- V2 `QualityGate`: hard thresholds, liquidity/volume, multi-timeframe and
+  independent confirmations, explicit conflicts, regime overrides and R:R;
+- batch ranking по `final_quality_score`, configurable top-N/day limits и
+  cooldown для `ticker + horizon + direction`;
+- fail-closed OpenAI second opinion только для `PASS` candidates, строгий JSON
+  schema, token/cost/latency/error telemetry и запрет LLM «спасать» REJECT;
+- frozen `candidate_experiments` для quant/AI approved/rejected cohorts и
+  отдельный lifecycle фактического результата даже для неопубликованных идей;
+- Telegram-меню из шести разделов, button-only настройки, V2-карточка и экраны
+  AI/technical/fundamental/market/lifecycle;
+- пользовательские фильтры: частота, горизонт, риск, сила, AI и типы уведомлений;
 - один APScheduler с независимыми ingestion, scanning, lifecycle, reporting и
   daily-summary jobs;
 - event-outbox deduplication: новая идея и каждый lifecycle-переход доставляются
@@ -55,9 +63,13 @@ sector peer coverage недостаточен, fundamental factor честно �
 ```text
 MOEX ISS → Ingestion → Stock + IMOEX candles (DB)
                           ↓                 ↓
-Analysis → Scoring ← MarketRegime/RelativeStrength → TradingIdea → Risk
+Analysis → Scoring ← MarketRegime/RelativeStrength → Quant candidate → Risk
                  ↖ Point-in-time Fundamentals
-                                                    ↓
+                                                    ↓ QualityGate
+                                          Candidate experiment (frozen)
+                                                    ↓ PASS only
+                                           AI structured second opinion
+                                                    ↓ APPROVE only
                                              Idea Repository
                                                     ↓
                                              Idea Tracker
@@ -68,7 +80,9 @@ Historical candles → тот же Signal/TradingIdea/Risk/Tracker pipeline → 
 ```
 
 Подробные границы модулей и инварианты описаны в
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Отдельный V2 decision record с
+QualityGate, AI-контрактом, OOS-цифрами и ограничениями находится в
+[`docs/V2_QUALITY_AI.md`](docs/V2_QUALITY_AI.md).
 
 ## Горизонты
 
@@ -105,6 +119,7 @@ Copy-Item .env.example .env
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:replace_me
+OPENAI_API_KEY=sk-replace_me
 ```
 
 Команды приложения:
@@ -117,6 +132,7 @@ python -m app backtest SBER SWING_5D
 python -m app.research ingest --date-to 2026-08-18
 python -m app.research run
 python -m app.research ablation --horizons POSITION_1M SWING_5D
+python -m app.research quality-v2
 ```
 
 `run`, `ingest` и `backtest` сами выполняют Alembic upgrade. Отдельный `migrate`
@@ -126,7 +142,9 @@ python -m app.research ablation --horizons POSITION_1M SWING_5D
 
 ## Telegram
 
-После `/start` доступны три основные кнопки. Дополнительные команды:
+После `/start` доступны «Лучшие идеи», «Активные идеи», «Статистика»,
+«Настройки», «Анализ рынка» и «Статус системы». Все основные фильтры и
+notification preferences меняются кнопками. Slash-команды остаются fallback:
 
 ```text
 /best
@@ -153,6 +171,18 @@ Ingestion, scanning, lifecycle/paper и Telegram dispatch запускаются
 notification outbox не отправляет уже доставленные события повторно.
 
 ## Scoring и риск
+
+V2 не меняет математический score задним числом. После существующего quant
+candidate применяется отдельный `QualityGate`; только `PASS` попадает в AI.
+Число независимых подтверждений задаётся по горизонту: `1D=4` остаётся
+research-only, а leakage-safe TRAIN/VALIDATION выбрали `5D=5` и `1M=5` до
+проверки на отдельном unseen TEST. AI
+получает только structured snapshot, не свечи и не внешний news context.
+
+Если `OPENAI_API_KEY` отсутствует, timeout/HTTP error/schema error или model
+refusal дают `WAIT`: candidate остаётся в research cohort, но `TradingIdea` не
+публикуется. Небезопасный fallback по умолчанию выключен. `AI score` — рейтинг
+анализа 0–100, не статистическая вероятность успеха.
 
 `TECHNICAL_SCORING_MODEL=legacy` оставлен default, чтобы обновление не меняло
 существующие сигналы скрыто. Компонентный вариант включается явно:
@@ -203,6 +233,20 @@ legacy/weighted baselines, calibration summary, OOS и walk-forward.
 D/E, требующие fundamentals, получают статус `not_evaluable`, если в dataset
 нет реального point-in-time coverage; нулевые/синтетические ratios не
 подставляются.
+
+`app.research quality-v2` калибрует число confirmations только на
+TRAIN/VALIDATION и формирует `V2_QUALITY_COMPARISON.md/json`. Historical AI
+replay намеренно не выполняется: вклад AI измеряется forward таблицей
+`candidate_experiments` (`ALL QUANT` / `AI APPROVED` / `AI REJECTED`).
+
+На полном фиксированном universe из 20 бумаг V2 QualityGate сократил unseen
+TEST volume для SWING с 2 016 до 406 идей (−79,86%), а для POSITION — с 723 до
+207 (−71,37%). POSITION улучшил PF `1,139→1,297` и expectancy
+`0,064R→0,166R`; SWING PF вырос только `0,886→0,901`, expectancy осталась
+отрицательной `−0,077R→−0,071R`, поэтому 5D сохраняет статус RESEARCH. Текущий
+legacy INTRADAY selector не создал OOS-кандидатов, и из него нельзя делать вывод
+о качестве фильтра. Полный результат и ограничения:
+[`V2_QUALITY_COMPARISON.md`](reports/backtests/V2_QUALITY_COMPARISON.md).
 
 Финальный ablation не изменил production selectors. Для POSITION full-context
 улучшил OOS/WF expectancy, но увеличил OOS max drawdown с 2.44% до 3.47%; regime

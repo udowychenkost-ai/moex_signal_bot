@@ -10,11 +10,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+from app.ai_analyst import AIAnalystService
 from app.backtest import BacktestEngine
 from app.bot import BotServices, create_router
 from app.config import get_settings
 from app.db import create_engine_and_session
 from app.domain import IdeaHorizon
+from app.experiments import CandidateExperimentTracker
 from app.forward import ForwardReportingService
 from app.fundamentals import (
     FundamentalAnalysisService,
@@ -27,11 +29,13 @@ from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
 from app.logging_config import configure_logging
 from app.market_context import MarketRegimeService
+from app.market_overview import MarketOverviewService
 from app.migrations import migrate_database
 from app.moex import MoexClient
 from app.observation import DataFreshnessGuard
 from app.operations import OperationalService
 from app.paper import PaperTradingService
+from app.quality import QualityGate
 from app.reporting import ReportingService
 from app.repositories import get_active_instrument, get_candles
 from app.scanner import MarketScanner
@@ -112,6 +116,7 @@ async def run_bot() -> None:
             reporting = ReportingService(
                 session_factory,
                 timezone=settings.scheduler_timezone,
+                strategy_version=settings.strategy_version,
             )
             paper = PaperTradingService(settings, session_factory)
             fundamental_ingestion = FundamentalIngestionService(
@@ -122,6 +127,8 @@ async def run_bot() -> None:
                     else []
                 ),
             )
+            experiment_tracker = CandidateExperimentTracker(session_factory)
+            ai_analyst = AIAnalystService(settings)
             scanner = MarketScanner(
                 session_factory,
                 ingestion,
@@ -129,6 +136,10 @@ async def run_bot() -> None:
                 tracker,
                 paper,
                 fundamentals=fundamental_ingestion,
+                settings=settings,
+                quality_gate=QualityGate(settings),
+                ai_analyst=ai_analyst,
+                experiment_tracker=experiment_tracker,
             )
             operations = OperationalService(settings, session_factory, freshness)
             forward_reporting = ForwardReportingService(
@@ -144,8 +155,14 @@ async def run_bot() -> None:
                 reporting,
                 paper,
                 operations,
+                MarketOverviewService(
+                    session_factory,
+                    benchmark=settings.market_benchmark,
+                    ai_analyst=ai_analyst,
+                ),
             )
             recovery_tracking = await tracker.track_all()
+            recovery_tracking.update(await experiment_tracker.track_all())
             recovery_paper = await paper.sync_all()
             logger.info(
                 "Startup recovery complete: lifecycle=%s paper=%s",

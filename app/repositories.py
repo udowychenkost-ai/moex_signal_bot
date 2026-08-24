@@ -459,6 +459,13 @@ async def update_user_settings(
     report_frequency: str | None = None,
     idea_horizon: str | None = None,
     minimum_confidence: float | None = None,
+    ai_filter_enabled: bool | None = None,
+    notify_new_idea: bool | None = None,
+    notify_activation: bool | None = None,
+    notify_tp: bool | None = None,
+    notify_sl: bool | None = None,
+    notify_expiry: bool | None = None,
+    notify_daily_summary: bool | None = None,
 ) -> None:
     values: dict[str, object] = {}
     if timeframe is not None:
@@ -471,6 +478,17 @@ async def update_user_settings(
         values["idea_horizon"] = idea_horizon
     if minimum_confidence is not None:
         values["minimum_confidence"] = minimum_confidence
+    for name, value in (
+        ("ai_filter_enabled", ai_filter_enabled),
+        ("notify_new_idea", notify_new_idea),
+        ("notify_activation", notify_activation),
+        ("notify_tp", notify_tp),
+        ("notify_sl", notify_sl),
+        ("notify_expiry", notify_expiry),
+        ("notify_daily_summary", notify_daily_summary),
+    ):
+        if value is not None:
+            values[name] = value
     if values:
         await session.execute(
             update(TelegramUser).where(TelegramUser.telegram_id == telegram_id).values(**values)

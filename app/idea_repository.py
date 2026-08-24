@@ -47,6 +47,26 @@ def _model_values(data: TradingIdeaData, material_hash: str) -> dict[str, object
         "volume_state": data.volume_state,
         "momentum_extreme_score": data.momentum_extreme_score,
         "fundamental_label": data.fundamental_label,
+        "quality_gate_result": data.quality_gate_result,
+        "final_quality_score": data.final_quality_score,
+        "supporting_factors": json.dumps(data.supporting_factors, ensure_ascii=False),
+        "contradicting_factors": json.dumps(data.contradicting_factors, ensure_ascii=False),
+        "confirmation_count": data.confirmation_count,
+        "strategy_version": data.strategy_version,
+        "ai_verdict": data.ai_verdict,
+        "ai_score": data.ai_score,
+        "ai_confidence": data.ai_confidence,
+        "ai_bull_case": data.ai_bull_case,
+        "ai_bear_case": data.ai_bear_case,
+        "ai_key_risks": json.dumps(data.ai_key_risks, ensure_ascii=False),
+        "ai_why_now": data.ai_why_now,
+        "ai_invalidation_conditions": json.dumps(
+            data.ai_invalidation_conditions, ensure_ascii=False
+        ),
+        "ai_short_summary": data.ai_short_summary,
+        "ai_provider": data.ai_provider,
+        "ai_model": data.ai_model,
+        "ai_reviewed_at": data.ai_reviewed_at,
         "expected_return_pct": data.expected_return_pct,
         "risk_pct": data.risk_pct,
         "risk_reward_ratio": data.risk_reward_ratio,
@@ -241,6 +261,26 @@ async def create_or_update_idea(
                     sort_keys=True,
                     allow_nan=False,
                 ),
+                quality_gate_result=data.quality_gate_result,
+                final_quality_score=data.final_quality_score,
+                supporting_factors=json.dumps(data.supporting_factors, ensure_ascii=False),
+                contradicting_factors=json.dumps(data.contradicting_factors, ensure_ascii=False),
+                confirmation_count=data.confirmation_count,
+                strategy_version=data.strategy_version,
+                ai_verdict=data.ai_verdict,
+                ai_score=data.ai_score,
+                ai_confidence=data.ai_confidence,
+                ai_bull_case=data.ai_bull_case,
+                ai_bear_case=data.ai_bear_case,
+                ai_key_risks=json.dumps(data.ai_key_risks, ensure_ascii=False),
+                ai_why_now=data.ai_why_now,
+                ai_invalidation_conditions=json.dumps(
+                    data.ai_invalidation_conditions, ensure_ascii=False
+                ),
+                ai_short_summary=data.ai_short_summary,
+                ai_provider=data.ai_provider,
+                ai_model=data.ai_model,
+                ai_reviewed_at=data.ai_reviewed_at,
             )
         )
         add_idea_event(
@@ -282,6 +322,26 @@ async def create_or_update_idea(
     existing.volume_state = data.volume_state
     existing.momentum_extreme_score = data.momentum_extreme_score
     existing.fundamental_label = data.fundamental_label
+    existing.quality_gate_result = data.quality_gate_result
+    existing.final_quality_score = data.final_quality_score
+    existing.supporting_factors = json.dumps(data.supporting_factors, ensure_ascii=False)
+    existing.contradicting_factors = json.dumps(data.contradicting_factors, ensure_ascii=False)
+    existing.confirmation_count = data.confirmation_count
+    existing.strategy_version = data.strategy_version
+    existing.ai_verdict = data.ai_verdict
+    existing.ai_score = data.ai_score
+    existing.ai_confidence = data.ai_confidence
+    existing.ai_bull_case = data.ai_bull_case
+    existing.ai_bear_case = data.ai_bear_case
+    existing.ai_key_risks = json.dumps(data.ai_key_risks, ensure_ascii=False)
+    existing.ai_why_now = data.ai_why_now
+    existing.ai_invalidation_conditions = json.dumps(
+        data.ai_invalidation_conditions, ensure_ascii=False
+    )
+    existing.ai_short_summary = data.ai_short_summary
+    existing.ai_provider = data.ai_provider
+    existing.ai_model = data.ai_model
+    existing.ai_reviewed_at = data.ai_reviewed_at
     existing.rationale = "\n".join(data.rationale)
     existing.material_hash = material_hash
     existing.version += 1
@@ -314,17 +374,33 @@ async def list_open_ideas(
     horizon: str | None = None,
     minimum_confidence: float = 0,
     limit: int = 50,
+    strategy_version: str | None = None,
+    created_after: datetime | None = None,
+    ai_approved_only: bool = False,
 ) -> list[TradingIdea]:
+    strength_filter = (
+        TradingIdea.final_quality_score >= minimum_confidence
+        if strategy_version is not None
+        else TradingIdea.confidence >= minimum_confidence
+    )
     statement = select(TradingIdea).where(
         TradingIdea.status.in_(OPEN_IDEA_STATUSES),
-        TradingIdea.confidence >= minimum_confidence,
+        strength_filter,
     )
     if horizon and horizon != "all":
         statement = statement.where(TradingIdea.horizon == horizon)
+    if strategy_version is not None:
+        statement = statement.where(TradingIdea.strategy_version == strategy_version)
+    if created_after is not None:
+        statement = statement.where(TradingIdea.created_at >= created_after)
+    if ai_approved_only:
+        statement = statement.where(TradingIdea.ai_verdict.in_(("STRONG_APPROVE", "APPROVE")))
     rows = await session.scalars(
-        statement.order_by(TradingIdea.confidence.desc(), TradingIdea.created_at.desc()).limit(
-            limit
-        )
+        statement.order_by(
+            TradingIdea.final_quality_score.desc(),
+            TradingIdea.confidence.desc(),
+            TradingIdea.created_at.desc(),
+        ).limit(limit)
     )
     return list(rows)
 
@@ -340,6 +416,8 @@ async def list_unnotified_ideas(
     horizon: str,
     minimum_confidence: float,
     limit: int = 20,
+    strategy_version: str | None = None,
+    ai_approved_only: bool = False,
 ) -> list[TradingIdea]:
     current_version_sent = exists().where(
         IdeaNotification.telegram_id == telegram_id,
@@ -350,17 +428,28 @@ async def list_unnotified_ideas(
         IdeaNotification.telegram_id == telegram_id,
         IdeaNotification.idea_id == TradingIdea.id,
     )
+    strength_filter = (
+        TradingIdea.final_quality_score >= minimum_confidence
+        if strategy_version is not None
+        else TradingIdea.confidence >= minimum_confidence
+    )
     statement = select(TradingIdea).where(
-        TradingIdea.confidence >= minimum_confidence,
+        strength_filter,
         ~current_version_sent,
         (TradingIdea.status.in_(OPEN_IDEA_STATUSES) | previously_sent),
     )
+    if strategy_version is not None:
+        statement = statement.where(TradingIdea.strategy_version == strategy_version)
+    if ai_approved_only:
+        statement = statement.where(TradingIdea.ai_verdict.in_(("STRONG_APPROVE", "APPROVE")))
     if horizon != "all":
         statement = statement.where(TradingIdea.horizon == horizon)
     result = await session.scalars(
-        statement.order_by(TradingIdea.confidence.desc(), TradingIdea.updated_at.desc()).limit(
-            limit
-        )
+        statement.order_by(
+            TradingIdea.final_quality_score.desc(),
+            TradingIdea.confidence.desc(),
+            TradingIdea.updated_at.desc(),
+        ).limit(limit)
     )
     return list(result)
 
