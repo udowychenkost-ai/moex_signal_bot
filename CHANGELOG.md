@@ -4,6 +4,16 @@
 
 ### Added
 
+- V2.1.2 Gemini provider health hotfix: official `v1beta` ListModels probe,
+  startup `OK/DEGRADED/ERROR` validation, compact Telegram request diagnostics,
+  manual `python -m app gemini-health` check and a complete last-scan funnel.
+- Structured Google error parsing now records safe HTTP/error codes without API
+  keys. Model `404`/unsupported responses trigger exactly one Flash Lite fallback;
+  both unavailable models remain fail-closed as `AI_NOT_REVIEWED / WAIT`.
+- Every scan writes one compact funnel log line and persists checked/candidate,
+  QualityGate, AI outcome, publication and top rejection-reason counters in the
+  existing scheduler job details field; no database migration is required.
+
 - V2.1.1 Telegram UX hotfix: compact historical no-review state, Russian Gemini
   verdict labels and an explicit `Проанализировать сейчас` action that uses
   current market data without rewriting the idea or immutable creation snapshot.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -50,6 +51,7 @@ from app.models import CandidateExperiment, SignalRecord, TelegramUser, TradingI
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService, realized_r
 from app.paper import PaperTradingService, format_paper_summary
+from app.provider_health import GeminiHealthMonitor, format_gemini_diagnostics
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
 from app.repositories import (
     add_watchlist_item,
@@ -98,6 +100,7 @@ class BotServices:
     operations: OperationalService | None = None
     market_overview: MarketOverviewService | None = None
     on_demand_ai: OnDemandAIService | None = None
+    gemini_health: GeminiHealthMonitor | None = None
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -478,6 +481,40 @@ def _results_text(result_filter: str, page: ContextPage[ResultItem]) -> str:
         )
     lines.append(f"\nСтраница {page.page + 1}/{page.total_pages} · всего {page.total_items}")
     return "\n".join(lines)
+
+
+def format_scan_funnel(details: dict[str, object]) -> str:
+    def count(key: str) -> int:
+        value = details.get(key, 0)
+        return int(value) if isinstance(value, int | float) else 0
+
+    raw_reasons = details.get("top_rejection_reasons")
+    reasons: list[str] = []
+    if isinstance(raw_reasons, list):
+        for item in raw_reasons[:5]:
+            if not isinstance(item, dict):
+                continue
+            reason = str(item.get("reason") or "").strip()
+            amount = item.get("count", 0)
+            if reason and isinstance(amount, int | float):
+                reasons.append(f"• {escape(reason)} — <b>{int(amount)}</b>")
+    ai_error = count("ai_errors") + count("ai_not_reviewed")
+    return (
+        f"Checked instruments: <b>{count('checked_instruments')}</b>\n"
+        f"Quant candidates: <b>{count('quant_candidates')}</b>\n\n"
+        "<b>QualityGate:</b>\n"
+        f"PASS: <b>{count('quality_pass')}</b>\n"
+        f"WEAK: <b>{count('quality_weak')}</b>\n"
+        f"REJECT: <b>{count('quality_reject')}</b>\n\n"
+        "<b>AI:</b>\n"
+        f"APPROVE: <b>{count('ai_approve')}</b>\n"
+        f"STRONG_APPROVE: <b>{count('ai_strong_approve')}</b>\n"
+        f"WAIT: <b>{count('ai_wait')}</b>\n"
+        f"REJECT: <b>{count('ai_rejected')}</b>\n"
+        f"ERROR/NOT_REVIEWED: <b>{ai_error}</b>\n\n"
+        f"Published: <b>{count('published')}</b>\n\n"
+        "<b>Top rejection reasons:</b>\n" + ("\n".join(reasons) if reasons else "нет данных")
+    )
 
 
 def _signal_history_text(ticker: str, page: ContextPage[SignalRecord]) -> str:
@@ -1509,20 +1546,12 @@ def create_router(services: BotServices) -> Router:
                 f"Stale: <b>{escape(examples or 'нет')}</b>"
             )
         elif section == "gemini":
-            api_key_configured = bool(
-                services.settings.gemini_api_key
-                if services.settings.ai_provider == "gemini"
-                else services.settings.openai_api_key
-            )
-            text = (
-                "🧠 <b>AI PROVIDER</b>\n\n"
-                f"Provider: <b>{escape(services.settings.ai_provider)}</b>\n"
-                f"Primary: <b>{escape(services.settings.ai_model)}</b>\n"
-                f"Fallback: <b>{escape(services.settings.ai_fallback_model)}</b>\n"
-                "API key: <b>"
-                f"{'configured' if api_key_configured else 'missing'}</b>\n"
-                "Значение ключа никогда не показывается."
-            )
+            if services.gemini_health is None:
+                text = "🧠 <b>Gemini</b>\n\nAPI: <b>ERROR</b>\nProvider health monitor недоступен."
+            else:
+                provider_status = await services.gemini_health.refresh()
+                request_stats = await services.gemini_health.request_diagnostics()
+                text = format_gemini_diagnostics(provider_status, request_stats)
         elif section == "scheduler":
             jobs = "\n".join(
                 f"• {escape(item.job_name)}: "
@@ -1543,12 +1572,18 @@ def create_router(services: BotServices) -> Router:
             scan = next(
                 (item for item in status.job_states if item.job_name == "idea_scanning"), None
             )
+            try:
+                scan_details = json.loads(scan.details or "{}") if scan is not None else {}
+            except (json.JSONDecodeError, TypeError):
+                scan_details = {}
+            if not isinstance(scan_details, dict):
+                scan_details = {}
             text = (
                 "📈 <b>ПОСЛЕДНИЙ SCAN</b>\n\n"
                 f"Finished: <b>{status.latest_scan_time or 'нет'}</b>\n"
                 f"Next: <b>{status.next_scan_time or 'нет'}</b>\n"
-                f"Result: <b>{'OK' if scan and scan.success else 'ERROR/WAIT'}</b>\n"
-                f"Details: <code>{escape((scan.details if scan else '')[:1000])}</code>"
+                f"Result: <b>{'OK' if scan and scan.success else 'ERROR/WAIT'}</b>\n\n"
+                f"{format_scan_funnel(scan_details)}"
             )
         await _edit_context(callback, text, status_context_keyboard())
         await callback.answer()

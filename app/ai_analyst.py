@@ -71,6 +71,9 @@ class AIRequestAttempt:
     estimated_cost_usd: float
     latency_ms: int
     error: str = ""
+    status_code: int | None = None
+    error_code: str = ""
+    model_unavailable: bool = False
     fallback_used: bool = False
     usage: dict[str, Any] | None = None
 
@@ -203,6 +206,9 @@ def _attempt(result: ProviderCallResult, *, fallback_used: bool) -> AIRequestAtt
         estimated_cost_usd=result.estimated_cost_usd,
         latency_ms=result.latency_ms,
         error=result.error,
+        status_code=result.status_code,
+        error_code=result.error_code,
+        model_unavailable=result.model_unavailable,
         fallback_used=fallback_used,
         usage=result.usage,
     )
@@ -223,6 +229,9 @@ def _attempt_usage(attempts: tuple[AIRequestAttempt, ...]) -> dict[str, Any]:
                 "provider": attempt.provider,
                 "model": attempt.model,
                 "fallback_used": attempt.fallback_used,
+                "status_code": attempt.status_code,
+                "error_code": attempt.error_code,
+                "model_unavailable": attempt.model_unavailable,
                 "usage": attempt.usage or {},
             }
             for attempt in attempts
@@ -273,6 +282,7 @@ class AIAnalystService:
                     else self.settings.ai_output_cost_per_million
                 ),
                 client=self.client,
+                is_fallback=fallback,
             )
         return OpenAIProvider(
             api_key=self.settings.openai_api_key,

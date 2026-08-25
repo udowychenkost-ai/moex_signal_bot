@@ -42,7 +42,7 @@ class ScheduledJobs:
             reported_errors = sum(
                 int(value)
                 for key, value in result.items()
-                if "error" in key and isinstance(value, int | float)
+                if "error" in key and key != "ai_attempt_errors" and isinstance(value, int | float)
             )
             successful = reported_errors == 0
             if self.operations is not None:
@@ -71,7 +71,22 @@ class ScheduledJobs:
         return await self._run("market_ingestion", self.scanner.ingest)
 
     async def scan_market(self) -> dict[str, Any]:
-        return await self._run("idea_scanning", self.scanner.scan_ideas)
+        result = await self._run("idea_scanning", self.scanner.scan_ideas)
+        logger.info(
+            "scan completed checked=%s candidates=%s pass=%s weak=%s reject=%s "
+            "ai_approve=%s ai_wait=%s ai_reject=%s ai_error=%s published=%s",
+            result.get("checked_instruments", 0),
+            result.get("quant_candidates", 0),
+            result.get("quality_pass", 0),
+            result.get("quality_weak", 0),
+            result.get("quality_reject", 0),
+            int(result.get("ai_approve", 0)) + int(result.get("ai_strong_approve", 0)),
+            result.get("ai_wait", 0),
+            result.get("ai_rejected", 0),
+            int(result.get("ai_errors", 0)) + int(result.get("ai_not_reviewed", 0)),
+            result.get("published", result.get("ideas_created", 0)),
+        )
+        return result
 
     async def track_lifecycle(self) -> dict[str, Any]:
         async def track_and_paper() -> dict[str, Any]:

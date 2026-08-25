@@ -11,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.ai_analyst import AIAnalystService
+from app.ai_providers import GeminiProvider
 from app.backtest import BacktestEngine
 from app.bot import BotServices, create_router
 from app.config import get_settings
@@ -36,6 +37,7 @@ from app.observation import DataFreshnessGuard
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService
 from app.paper import PaperTradingService
+from app.provider_health import GeminiHealthMonitor
 from app.quality import QualityGate
 from app.reporting import ReportingService
 from app.repositories import get_active_instrument, get_candles
@@ -130,6 +132,23 @@ async def run_bot() -> None:
             )
             experiment_tracker = CandidateExperimentTracker(session_factory)
             ai_analyst = AIAnalystService(settings)
+            gemini_health = None
+            if settings.ai_provider == "gemini":
+                primary_provider = (
+                    ai_analyst.provider if isinstance(ai_analyst.provider, GeminiProvider) else None
+                )
+                fallback_provider = (
+                    ai_analyst.fallback_provider
+                    if isinstance(ai_analyst.fallback_provider, GeminiProvider)
+                    else None
+                )
+                gemini_health = GeminiHealthMonitor(
+                    settings,
+                    session_factory,
+                    primary=primary_provider,
+                    fallback=fallback_provider,
+                )
+                await gemini_health.validate_startup()
             quality_gate = QualityGate(settings)
             scanner = MarketScanner(
                 session_factory,
@@ -170,6 +189,7 @@ async def run_bot() -> None:
                     ai_analyst,
                     quality_gate,
                 ),
+                gemini_health,
             )
             recovery_tracking = await tracker.track_all()
             recovery_tracking.update(await experiment_tracker.track_all())
@@ -249,11 +269,19 @@ async def healthcheck_once() -> None:
         await engine.dispose()
 
 
+async def gemini_health_once() -> int:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    report = await GeminiHealthMonitor(settings).refresh()
+    print(json.dumps(asdict(report), ensure_ascii=False, indent=2, default=str))
+    return int(report.api_status == "ERROR")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX signal bot")
     parser.add_argument(
         "command",
-        choices=("run", "ingest", "backtest", "migrate", "healthcheck"),
+        choices=("run", "ingest", "backtest", "migrate", "healthcheck", "gemini-health"),
         nargs="?",
         default="run",
     )
@@ -275,6 +303,8 @@ def main() -> None:
         asyncio.run(run_backtest(args.ticker, args.horizon))
     elif args.command == "migrate":
         asyncio.run(migrate_once())
+    elif args.command == "gemini-health":
+        raise SystemExit(asyncio.run(gemini_health_once()))
     else:
         asyncio.run(healthcheck_once())
 

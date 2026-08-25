@@ -86,6 +86,7 @@ docker compose logs --tail=200 app
 docker compose logs -f app
 docker compose exec app python -m app healthcheck
 docker compose exec app python -m app migrate
+docker compose exec app python -m app gemini-health
 ```
 
 In Telegram run:
@@ -100,9 +101,11 @@ In Telegram run:
 `/status` must show `Database: OK`, `Scheduler: RUNNING`, a recent MOEX update,
 and successful ingestion/scanning/lifecycle/reporting jobs. A stale timeframe is
 shown explicitly and prevents new ideas for the affected ticker/horizon.
-The `idea_scanning` job details include QualityGate counts, AI requests/tokens/
-estimated cost/latency errors/fallbacks, cooldown suppressions and top-N
-suppressions.
+The `idea_scanning` job details include checked instruments, quant candidates,
+QualityGate PASS/WEAK/REJECT, AI outcomes/errors, publications, top rejection
+reasons, requests/tokens/cost/fallbacks, cooldown and top-N suppressions. The
+Telegram `🧠 Gemini` status calls ListModels and shows primary/fallback health and
+today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
@@ -132,13 +135,15 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.1/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.2/' .env
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
+docker compose config --quiet
 docker compose build --pull
 docker compose up -d --remove-orphans
 docker compose ps
 docker compose logs --tail=200 app
 docker compose exec app python -m app healthcheck
+docker compose exec app python -m app gemini-health
 docker compose exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 ```

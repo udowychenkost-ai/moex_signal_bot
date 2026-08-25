@@ -198,8 +198,9 @@ research-only, а leakage-safe TRAIN/VALIDATION выбрали `5D=5` и `1M=5` 
 проверки на отдельном unseen TEST. AI
 получает только structured snapshot, не свечи и не внешний news context.
 
-Default provider — Gemini `gemini-2.5-flash`. Только при timeout, rate limit или
-временной недоступности primary выполняется один запрос к
+Default provider — Gemini `gemini-2.5-flash`. При timeout, rate limit,
+`MODEL_NOT_FOUND`, unsupported model или временной недоступности primary
+выполняется один запрос к
 `gemini-2.5-flash-lite`. Если обе модели недоступны, отсутствует
 `GEMINI_API_KEY`, ответ повреждён или не соответствует schema, результат —
 `AI_NOT_REVIEWED / WAIT`: candidate остаётся в research cohort, но
@@ -207,6 +208,17 @@ Default provider — Gemini `gemini-2.5-flash`. Только при timeout, rat
 выключен. `AI score` — рейтинг анализа 0–100, не статистическая вероятность
 успеха. Для альтернативного OpenAI provider задайте `AI_PROVIDER=openai`,
 совместимый `AI_MODEL` и `OPENAI_API_KEY`.
+
+При старте Gemini проверяется через официальный `v1beta/models` ListModels API.
+Primary unavailable при доступном fallback даёт `DEGRADED`, обе недоступные
+модели — `ERROR`; market ingestion и scheduler при этом продолжают работать.
+Кнопка `🧠 Gemini` показывает доступность моделей и статистику запросов без
+секретов, а `📈 Последний scan` — полный QualityGate/AI/publication funnel.
+Немедленная ручная проверка без ожидания сигнала:
+
+```bash
+python -m app gemini-health
+```
 
 `TECHNICAL_SCORING_MODEL=legacy` оставлен default, чтобы обновление не меняло
 существующие сигналы скрыто. Компонентный вариант включается явно:

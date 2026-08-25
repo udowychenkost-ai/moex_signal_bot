@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -77,7 +78,7 @@ class MarketScanner:
             result.update(await self.experiment_tracker.track_all())
         return result
 
-    async def scan_ideas(self) -> dict[str, int | float]:
+    async def scan_ideas(self) -> dict[str, Any]:
         if (
             self.settings is not None
             and self.settings.quality_gate_enabled
@@ -148,13 +149,14 @@ class MarketScanner:
                 published_idea_id=published_idea_id,
             )
 
-    async def _scan_ideas_v2(self) -> dict[str, int | float]:
+    async def _scan_ideas_v2(self) -> dict[str, Any]:
         assert self.settings is not None
         assert self.quality_gate is not None
         async with self.session_factory() as session:
             instruments = await list_active_instruments(session)
 
-        counters: dict[str, int | float] = {
+        counters: dict[str, Any] = {
+            "checked_instruments": len(instruments),
             "quant_candidates": 0,
             "quality_pass": 0,
             "quality_weak": 0,
@@ -163,9 +165,13 @@ class MarketScanner:
             "rank_suppressed": 0,
             "ai_requests": 0,
             "ai_approved": 0,
+            "ai_approve": 0,
+            "ai_strong_approve": 0,
             "ai_wait": 0,
             "ai_rejected": 0,
             "ai_errors": 0,
+            "ai_not_reviewed": 0,
+            "ai_attempt_errors": 0,
             "ai_fallbacks": 0,
             "ai_input_tokens": 0,
             "ai_output_tokens": 0,
@@ -176,6 +182,7 @@ class MarketScanner:
             "ideas_stale": 0,
             "idea_errors": 0,
         }
+        rejection_reasons: Counter[str] = Counter()
         grouped: dict[IdeaHorizon, list[tuple[TradingIdeaData, QualityGateResult]]] = defaultdict(
             list
         )
@@ -202,10 +209,12 @@ class MarketScanner:
                         quality,
                         strategy_version=self.settings.strategy_version,
                     )
+                    counters[f"quality_{quality.decision.value.lower()}"] += 1
+                    if quality.decision != QualityGateDecision.PASS:
+                        rejection_reasons.update(quality.reasons or ("Причина не указана",))
                     if await self._already_recorded(candidate):
                         counters["ideas_skipped"] += 1
                         continue
-                    counters[f"quality_{quality.decision.value.lower()}"] += 1
                     if quality.decision != QualityGateDecision.PASS:
                         await self._save_experiment(
                             candidate,
@@ -247,13 +256,15 @@ class MarketScanner:
             approved: list[tuple[TradingIdeaData, QualityGateResult, AIReviewResult | None]] = []
             for candidate, quality in ai_rows:
                 if owner_ai_disabled:
+                    counters["ai_not_reviewed"] += 1
                     approved.append((candidate, quality, None))
                     continue
                 if not self.settings.ai_filter_enabled:
                     if self.settings.ai_allow_unreviewed_fallback:
+                        counters["ai_not_reviewed"] += 1
                         approved.append((candidate, quality, None))
                     else:
-                        counters["ai_wait"] += 1
+                        counters["ai_not_reviewed"] += 1
                         await self._save_experiment(
                             candidate,
                             quality,
@@ -261,7 +272,6 @@ class MarketScanner:
                         )
                     continue
                 if self.ai_analyst is None:
-                    counters["ai_wait"] += 1
                     counters["ai_errors"] += 1
                     await self._save_experiment(
                         candidate,
@@ -276,9 +286,23 @@ class MarketScanner:
                 counters["ai_output_tokens"] += review.output_tokens
                 counters["ai_estimated_cost_usd"] += review.estimated_cost_usd
                 apply_ai_review(candidate, review)
-                counters["ai_errors"] += review.error_count
-                if review.approved:
+                counters["ai_attempt_errors"] += review.error_count
+                if review.status != "OK":
+                    counters["ai_errors"] += 1
+                    await self._save_experiment(
+                        candidate,
+                        quality,
+                        review=review,
+                        publish_reason="AI_NOT_REVIEWED",
+                    )
+                elif review.approved:
                     counters["ai_approved"] += 1
+                    key = (
+                        "ai_strong_approve"
+                        if review.analysis.verdict == AIVerdict.STRONG_APPROVE
+                        else "ai_approve"
+                    )
+                    counters[key] += 1
                     approved.append((candidate, quality, review))
                 else:
                     key = (
@@ -346,6 +370,10 @@ class MarketScanner:
                 else:
                     counters["ideas_skipped"] += 1
         counters["ai_estimated_cost_usd"] = round(float(counters["ai_estimated_cost_usd"]), 8)
+        counters["published"] = counters["ideas_created"] + counters["ideas_updated"]
+        counters["top_rejection_reasons"] = [
+            {"reason": reason, "count": count} for reason, count in rejection_reasons.most_common(5)
+        ]
         return counters
 
     async def sync_paper(self) -> dict[str, int]:
