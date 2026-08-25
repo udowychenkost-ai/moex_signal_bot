@@ -30,8 +30,8 @@ Edit `.env` and set at minimum:
 - one long random `POSTGRES_PASSWORD` and exactly the same URL-encoded password
 inside `DATABASE_URL`.
 - `GEMINI_API_KEY` for the default `AI_PROVIDER=gemini` and
-  `AI_MODEL=gemini-2.5-flash`. One transient primary failure uses exactly one
-  `AI_FALLBACK_MODEL=gemini-2.5-flash-lite` request. The V2 policy is
+  `AI_MODEL=gemini-3.6-flash`. One transient primary failure uses exactly one
+  `AI_FALLBACK_MODEL=gemini-flash-lite-latest` request. The V2 policy is
   fail-closed: if review is unavailable, PASS candidates are recorded as
   `AI_NOT_REVIEWED / WAIT` and no new V2 idea is published. OpenAI remains an
   optional provider but is not the deployment default.
@@ -123,8 +123,8 @@ secrets and V2 thresholds unchanged:
 ```env
 GEMINI_API_KEY=replace_with_real_key
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.5-flash
-AI_FALLBACK_MODEL=gemini-2.5-flash-lite
+AI_MODEL=gemini-3.6-flash
+AI_FALLBACK_MODEL=gemini-flash-lite-latest
 AI_FILTER_ENABLED=true
 AI_ALLOW_UNREVIEWED_FALLBACK=false
 ```
@@ -136,6 +136,8 @@ git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
 sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.2/' .env
+sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
+sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
 docker compose config --quiet
 docker compose build --pull

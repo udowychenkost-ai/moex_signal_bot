@@ -124,8 +124,8 @@ Copy-Item .env.example .env
 TELEGRAM_BOT_TOKEN=123456:replace_me
 GEMINI_API_KEY=replace_me
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.5-flash
-AI_FALLBACK_MODEL=gemini-2.5-flash-lite
+AI_MODEL=gemini-3.6-flash
+AI_FALLBACK_MODEL=gemini-flash-lite-latest
 ```
 
 Команды приложения:
@@ -198,10 +198,10 @@ research-only, а leakage-safe TRAIN/VALIDATION выбрали `5D=5` и `1M=5` 
 проверки на отдельном unseen TEST. AI
 получает только structured snapshot, не свечи и не внешний news context.
 
-Default provider — Gemini `gemini-2.5-flash`. При timeout, rate limit,
+Default provider — Gemini `gemini-3.6-flash`. При timeout, rate limit,
 `MODEL_NOT_FOUND`, unsupported model или временной недоступности primary
 выполняется один запрос к
-`gemini-2.5-flash-lite`. Если обе модели недоступны, отсутствует
+`gemini-flash-lite-latest`. Если обе модели недоступны, отсутствует
 `GEMINI_API_KEY`, ответ повреждён или не соответствует schema, результат —
 `AI_NOT_REVIEWED / WAIT`: candidate остаётся в research cohort, но
 `TradingIdea` не публикуется. Fallback без успешного AI review по умолчанию
@@ -209,7 +209,9 @@ Default provider — Gemini `gemini-2.5-flash`. При timeout, rate limit,
 успеха. Для альтернативного OpenAI provider задайте `AI_PROVIDER=openai`,
 совместимый `AI_MODEL` и `OPENAI_API_KEY`.
 
-При старте Gemini проверяется через официальный `v1beta/models` ListModels API.
+При старте Gemini сначала сверяется с `v1beta/models`, затем для каждой модели
+выполняется минимальный structured `generateContent` probe. Наличие в ListModels
+означает только `LISTED`; доступной модель считается только при `CALLABLE=YES`.
 Primary unavailable при доступном fallback даёт `DEGRADED`, обе недоступные
 модели — `ERROR`; market ingestion и scheduler при этом продолжают работать.
 Кнопка `🧠 Gemini` показывает доступность моделей и статистику запросов без

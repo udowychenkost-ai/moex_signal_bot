@@ -13,6 +13,10 @@
 - Every scan writes one compact funnel log line and persists checked/candidate,
   QualityGate, AI outcome, publication and top rejection-reason counters in the
   existing scheduler job details field; no database migration is required.
+- Production Gemini primary moved to callable `gemini-3.6-flash` with
+  `gemini-flash-lite-latest` fallback. Health now distinguishes `LISTED` from a
+  successful minimal structured `generateContent` probe (`CALLABLE`), covering
+  models that remain listed but return a new-user 404 when invoked.
 
 - V2.1.1 Telegram UX hotfix: compact historical no-review state, Russian Gemini
   verdict labels and an explicit `Проанализировать сейчас` action that uses
@@ -31,7 +35,7 @@
   AI calls; intraday publication cap defaults to zero while its research cohort
   continues to be measured.
 - Provider-neutral structured second opinion with Gemini
-  `gemini-2.5-flash` default, one-shot `gemini-2.5-flash-lite` transient
+  `gemini-3.6-flash` default, one-shot `gemini-flash-lite-latest` transient
   fallback, retained OpenAI alternative, fail-closed `AI_NOT_REVIEWED / WAIT`,
   strict no-invention prompt/schema and per-attempt provider/model/raw-usage/
   token/cost/latency/error/fallback telemetry.

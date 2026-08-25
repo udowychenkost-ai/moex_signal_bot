@@ -41,12 +41,18 @@ class ProviderCallResult:
 class GeminiHealthStatus:
     provider: str
     configured_model: str
-    model_available: bool
+    model_listed: bool
+    model_callable: bool
     api_reachable: bool
     status_code: int | None
     error_code: str
     error_message: str
     checked_at: datetime
+
+    @property
+    def model_available(self) -> bool:
+        """Compatibility alias: availability now requires a successful real call."""
+        return self.model_callable
 
 
 class AIProvider(Protocol):
@@ -320,13 +326,14 @@ class GeminiProvider:
         }
 
     async def check_health(self) -> GeminiHealthStatus:
-        """Verify API reachability and model support through the official ListModels API."""
+        """Distinguish a listed model from one callable through generateContent."""
         checked_at = datetime.now(UTC)
         if not self.api_key:
             result = GeminiHealthStatus(
                 provider=self.name,
                 configured_model=self.model,
-                model_available=False,
+                model_listed=False,
+                model_callable=False,
                 api_reachable=False,
                 status_code=None,
                 error_code="MISSING_API_KEY",
@@ -338,51 +345,67 @@ class GeminiProvider:
 
         own_client = self.client is None
         client: AsyncHTTPClient = self.client or httpx.AsyncClient(timeout=self.timeout_seconds)
+        listed = False
+        api_reachable = False
         try:
-            response = await client.get(
+            list_response = await client.get(
                 f"{self.base_url}/models",
                 headers=self._headers,
                 params={"pageSize": 1000},
             )
-            response.raise_for_status()
-            payload = response.json()
+            api_reachable = True
+            list_response.raise_for_status()
+            payload = list_response.json()
             if not isinstance(payload, dict):
                 raise ValueError("Gemini ListModels response must be a JSON object")
             models = payload.get("models")
             models = models if isinstance(models, list) else []
-            configured: dict[str, Any] | None = None
             for item in models:
                 if not isinstance(item, dict):
                     continue
                 name = item.get("name")
                 if isinstance(name, str) and _normalized_model(name) == self.model:
-                    configured = item
+                    listed = True
                     break
-            methods: list[str] = []
-            if configured is not None:
-                raw_methods = configured.get("supportedGenerationMethods")
-                if not isinstance(raw_methods, list):
-                    raw_methods = configured.get("supportedActions")
-                if isinstance(raw_methods, list):
-                    methods = [str(item) for item in raw_methods]
-            available = configured is not None and (not methods or "generateContent" in methods)
-            if available:
-                error_code = ""
-                error_message = ""
-            elif configured is None:
-                error_code = "MODEL_NOT_FOUND"
-                error_message = "Configured model is absent from Gemini ListModels response"
-            else:
-                error_code = "MODEL_UNSUPPORTED"
-                error_message = "Configured model does not support generateContent"
+        except Exception:
+            # ListModels is diagnostic only. The capability probe below is authoritative.
+            pass
+
+        try:
+            encoded_model = quote(self.model, safe="")
+            probe_response = await client.post(
+                f"{self.base_url}/models/{encoded_model}:generateContent",
+                headers=self._headers,
+                json={
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": 'Return exactly this JSON: {"ok": true}'}],
+                        }
+                    ],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "responseJsonSchema": {
+                            "type": "object",
+                            "properties": {"ok": {"type": "boolean"}},
+                            "required": ["ok"],
+                            "additionalProperties": False,
+                        },
+                        "maxOutputTokens": 32,
+                    },
+                },
+            )
+            api_reachable = True
+            probe_response.raise_for_status()
             result = GeminiHealthStatus(
                 provider=self.name,
                 configured_model=self.model,
-                model_available=available,
+                model_listed=listed,
+                model_callable=True,
                 api_reachable=True,
-                status_code=int(getattr(response, "status_code", 200)),
-                error_code=error_code,
-                error_message=error_message,
+                status_code=int(getattr(probe_response, "status_code", 200)),
+                error_code="",
+                error_message="",
                 checked_at=checked_at,
             )
         except httpx.HTTPStatusError as error:
@@ -390,7 +413,8 @@ class GeminiProvider:
             result = GeminiHealthStatus(
                 provider=self.name,
                 configured_model=self.model,
-                model_available=False,
+                model_listed=listed,
+                model_callable=False,
                 api_reachable=True,
                 status_code=status_code,
                 error_code=error_code,
@@ -401,19 +425,21 @@ class GeminiProvider:
             result = GeminiHealthStatus(
                 provider=self.name,
                 configured_model=self.model,
-                model_available=False,
-                api_reachable=False,
+                model_listed=listed,
+                model_callable=False,
+                api_reachable=api_reachable,
                 status_code=None,
                 error_code="TIMEOUT",
-                error_message=(str(error) or "Gemini ListModels timed out")[:1_000],
+                error_message=(str(error) or "Gemini generateContent probe timed out")[:1_000],
                 checked_at=checked_at,
             )
         except Exception as error:
             result = GeminiHealthStatus(
                 provider=self.name,
                 configured_model=self.model,
-                model_available=False,
-                api_reachable=False,
+                model_listed=listed,
+                model_callable=False,
+                api_reachable=api_reachable,
                 status_code=None,
                 error_code="NETWORK_ERROR",
                 error_message=(str(error) or type(error).__name__)[:1_000],
@@ -442,10 +468,12 @@ class GeminiProvider:
             )
         if (
             self.last_health is not None
-            and self.last_health.status_code == 200
-            and not self.last_health.model_available
+            and not self.last_health.model_callable
+            and self.last_health.error_code in {"MODEL_NOT_FOUND", "MODEL_UNSUPPORTED"}
         ):
-            unavailable_status = 404 if self.last_health.error_code == "MODEL_NOT_FOUND" else 400
+            unavailable_status = self.last_health.status_code or (
+                404 if self.last_health.error_code == "MODEL_NOT_FOUND" else 400
+            )
             return self._error(
                 self.last_health.error_message,
                 status_code=unavailable_status,
@@ -474,7 +502,6 @@ class GeminiProvider:
                 "responseMimeType": "application/json",
                 "responseJsonSchema": _gemini_schema(schema),
                 "maxOutputTokens": max_output_tokens,
-                "temperature": 0.1,
             },
         }
         started = perf_counter()

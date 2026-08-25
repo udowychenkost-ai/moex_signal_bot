@@ -126,8 +126,8 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
-    ai_model: str = "gemini-2.5-flash"
-    ai_fallback_model: str = "gemini-2.5-flash-lite"
+    ai_model: str = "gemini-3.6-flash"
+    ai_fallback_model: str = "gemini-flash-lite-latest"
     ai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     ai_max_output_tokens: int = Field(default=700, ge=100, le=4_000)
     ai_input_cost_per_million: float = Field(default=0.30, ge=0)

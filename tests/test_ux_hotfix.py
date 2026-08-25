@@ -39,7 +39,7 @@ def successful_review() -> AIReviewResult:
             short_summary="Сценарий подтверждён с контролируемым риском.",
         ),
         provider="gemini",
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         status="OK",
         input_tokens=100,
         output_tokens=50,

@@ -80,14 +80,14 @@ claimed in these historical figures. Full metrics and limitations are in
 
 ## AI contract
 
-Default provider: Google Gemini `gemini-2.5-flash`, configurable through
+Default provider: Google Gemini `gemini-3.6-flash`, configurable through
 `AI_PROVIDER` and `AI_MODEL`. `OpenAIProvider` remains available as an explicit
 alternative. Both adapters use a Pydantic-generated JSON schema, a bounded
 output budget and only the same compact decision snapshot. Gemini uses
 `responseMimeType=application/json` plus `responseJsonSchema`; unsupported
 Pydantic validation keywords are removed from the wire schema and validated
 locally after receipt. API details: [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
-[Gemini 2.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite)
+[Gemini Flash-Lite latest alias](https://ai.google.dev/gemini-api/docs/models)
 and [API errors](https://ai.google.dev/gemini-api/docs/generate-content/api-errors).
 
 The prompt forbids invented news, financial figures, levels, prices, events and
@@ -99,7 +99,7 @@ forecasts. Missing inputs are marked unavailable. The result schema contains:
   `invalidation_conditions` and `short_summary`.
 
 Timeout/rate-limit/temporary-unavailable errors from the primary Gemini model
-permit exactly one request to `gemini-2.5-flash-lite`. No fallback is attempted
+permit exactly one request to `gemini-flash-lite-latest`. No fallback is attempted
 for malformed JSON, schema mismatch, authentication/configuration errors or
 other permanent failures. If no valid review is received, the result is
 `AI_NOT_REVIEWED / WAIT`. Request provider, exact returned model, raw usage,

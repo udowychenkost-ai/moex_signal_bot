@@ -93,8 +93,10 @@ def format_gemini_diagnostics(
     health: GeminiRuntimeHealth,
     stats: GeminiRequestDiagnostics,
 ) -> str:
-    primary = "AVAILABLE" if health.primary.model_available else "UNAVAILABLE"
-    fallback = "AVAILABLE" if health.fallback.model_available else "UNAVAILABLE"
+    primary_listed = "YES" if health.primary.model_listed else "NO"
+    primary_callable = "YES" if health.primary.model_callable else "NO"
+    fallback_listed = "YES" if health.fallback.model_listed else "NO"
+    fallback_callable = "YES" if health.fallback.model_callable else "NO"
     last_success = stats.last_success_at.isoformat() if stats.last_success_at else "нет"
     last_error_at = stats.last_error_at.isoformat() if stats.last_error_at else "нет"
     status_prefix = (
@@ -108,8 +110,12 @@ def format_gemini_diagnostics(
         f"Primary model: <b>{escape(health.primary.configured_model)}</b>\n"
         f"Fallback model: <b>{escape(health.fallback.configured_model)}</b>\n\n"
         f"API: <b>{health.api_status}</b>\n\n"
-        f"Primary: <b>{primary}</b>\n"
-        f"Fallback: <b>{fallback}</b>\n\n"
+        "<b>Primary:</b>\n"
+        f"LISTED: <b>{primary_listed}</b>\n"
+        f"CALLABLE: <b>{primary_callable}</b>\n\n"
+        "<b>Fallback:</b>\n"
+        f"LISTED: <b>{fallback_listed}</b>\n"
+        f"CALLABLE: <b>{fallback_callable}</b>\n\n"
         f"Requests today: <b>{stats.requests_today}</b>\n"
         f"Success: <b>{stats.successes}</b>\n"
         f"Errors: <b>{stats.errors}</b>\n"
@@ -176,13 +182,15 @@ class GeminiHealthMonitor:
         report = await self.refresh()
         if report.api_status == "OK":
             logger.info(
-                "Gemini provider health OK primary=%s fallback=%s",
+                "Gemini provider health OK primary=%s callable=true fallback=%s callable=%s",
                 report.primary.configured_model,
                 report.fallback.configured_model,
+                str(report.fallback.model_callable).lower(),
             )
         elif report.api_status == "DEGRADED":
             logger.warning(
-                "Gemini provider health DEGRADED primary=%s unavailable fallback=%s available",
+                "Gemini provider health DEGRADED primary=%s callable=false "
+                "fallback=%s callable=true",
                 report.primary.configured_model,
                 report.fallback.configured_model,
             )

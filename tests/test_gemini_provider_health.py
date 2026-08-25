@@ -79,7 +79,7 @@ async def test_real_http_contract_primary_gemini_success() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
-        assert request.url.path == "/v1beta/models/gemini-2.5-flash:generateContent"
+        assert request.url.path == "/v1beta/models/gemini-3.6-flash:generateContent"
         assert request.headers["x-goog-api-key"] == "secret-test-key"
         body = json.loads(request.content)
         assert body["contents"][0]["role"] == "user"
@@ -87,13 +87,14 @@ async def test_real_http_contract_primary_gemini_success() -> None:
         config = body["generationConfig"]
         assert config["responseMimeType"] == "application/json"
         assert config["responseJsonSchema"]["type"] == "object"
+        assert "temperature" not in config
         return httpx.Response(200, request=request, json=gemini_payload())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         result = await generate(gemini_provider(settings, client))
 
     assert result.status == "OK"
-    assert result.model == "gemini-2.5-flash"
+    assert result.model == "gemini-3.6-flash"
 
 
 @pytest.mark.asyncio
@@ -101,14 +102,14 @@ async def test_base_url_and_model_resource_prefix_are_normalized_once() -> None:
     settings = Settings(_env_file=None, gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1beta/models/gemini-2.5-flash:generateContent"
+        assert request.url.path == "/v1beta/models/gemini-3.6-flash:generateContent"
         return httpx.Response(200, request=request, json=gemini_payload())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = GeminiProvider(
             api_key="test",
             base_url=f"{settings.gemini_base_url}/models",
-            model="models/gemini-2.5-flash",
+            model="models/gemini-3.6-flash",
             timeout_seconds=20,
             input_cost_per_million=0,
             output_cost_per_million=0,
@@ -130,7 +131,7 @@ async def test_primary_model_404_is_classified_as_fallback_eligible() -> None:
             json=google_error(
                 404,
                 "NOT_FOUND",
-                "models/gemini-2.5-flash is not found for API version v1beta",
+                "models/gemini-3.6-flash is not found for API version v1beta",
             ),
         )
 
@@ -158,7 +159,7 @@ async def test_model_404_uses_flash_lite_once_and_fallback_succeeds() -> None:
                 json=google_error(404, "NOT_FOUND", "model is not found"),
             )
         payload = gemini_payload()
-        payload["modelVersion"] = "gemini-2.5-flash-lite"
+        payload["modelVersion"] = "gemini-flash-lite-latest"
         return httpx.Response(200, request=request, json=payload)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -170,7 +171,7 @@ async def test_model_404_uses_flash_lite_once_and_fallback_succeeds() -> None:
 
     assert review.status == "OK"
     assert review.fallback_used
-    assert review.model == "gemini-2.5-flash-lite"
+    assert review.model == "gemini-flash-lite-latest"
     assert len(paths) == 2
     assert review.attempts[0].error_code == "MODEL_NOT_FOUND"
 
@@ -278,29 +279,86 @@ async def test_provider_health_uses_list_models_and_validates_generate_content()
     settings = Settings(_env_file=None, gemini_api_key="health-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/v1beta/models"
-        assert request.url.params["pageSize"] == "1000"
         assert request.headers["x-goog-api-key"] == "health-key"
-        return httpx.Response(
-            200,
-            request=request,
-            json={
-                "models": [
-                    {
-                        "name": "models/gemini-2.5-flash",
-                        "supportedGenerationMethods": ["generateContent"],
-                    }
-                ]
-            },
-        )
+        if request.method == "GET":
+            assert request.url.path == "/v1beta/models"
+            assert request.url.params["pageSize"] == "1000"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "models": [
+                        {
+                            "name": "models/gemini-3.6-flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        }
+                    ]
+                },
+            )
+
+        assert request.method == "POST"
+        assert request.url.path == "/v1beta/models/gemini-3.6-flash:generateContent"
+        body = json.loads(request.content)
+        assert body["generationConfig"]["responseMimeType"] == "application/json"
+        assert body["generationConfig"]["maxOutputTokens"] == 32
+        return httpx.Response(200, request=request, json={"candidates": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         health = await gemini_provider(settings, client).check_health()
 
     assert health.api_reachable
+    assert health.model_listed
+    assert health.model_callable
     assert health.model_available
     assert health.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_listed_legacy_model_with_generate_content_404_is_not_available() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="health-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "models": [
+                        {
+                            "name": "models/gemini-2.5-flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        }
+                    ]
+                },
+            )
+        assert request.url.path == "/v1beta/models/gemini-2.5-flash:generateContent"
+        return httpx.Response(
+            404,
+            request=request,
+            json=google_error(
+                404,
+                "NOT_FOUND",
+                (
+                    "This model models/gemini-2.5-flash is no longer available "
+                    "to new users. Please update your code to use "
+                    "models/gemini-3.6-flash."
+                ),
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        health = await gemini_provider(
+            settings,
+            client,
+            model="gemini-2.5-flash",
+        ).check_health()
+
+    assert health.model_listed
+    assert not health.model_callable
+    assert not health.model_available
+    assert health.api_reachable
+    assert health.status_code == 404
+    assert health.error_code == "MODEL_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -310,18 +368,31 @@ async def test_startup_validation_marks_primary_missing_fallback_available_degra
     settings = Settings(_env_file=None, gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            request=request,
-            json={
-                "models": [
-                    {
-                        "name": "models/gemini-2.5-flash-lite",
-                        "supportedGenerationMethods": ["generateContent"],
-                    }
-                ]
-            },
-        )
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "models": [
+                        {
+                            "name": "models/gemini-3.6-flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": "models/gemini-flash-lite-latest",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                    ]
+                },
+            )
+        if request.url.path.endswith("/gemini-3.6-flash:generateContent"):
+            return httpx.Response(
+                404,
+                request=request,
+                json=google_error(404, "NOT_FOUND", "primary is unavailable"),
+            )
+        assert request.url.path.endswith("/gemini-flash-lite-latest:generateContent")
+        return httpx.Response(200, request=request, json={"candidates": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         monitor = GeminiHealthMonitor(settings, client=client)
@@ -329,7 +400,11 @@ async def test_startup_validation_marks_primary_missing_fallback_available_degra
             report = await monitor.validate_startup()
 
     assert report.api_status == "DEGRADED"
+    assert report.primary.model_listed
+    assert not report.primary.model_callable
     assert not report.primary.model_available
+    assert report.fallback.model_listed
+    assert report.fallback.model_callable
     assert report.fallback.model_available
     assert "DEGRADED" in caplog.text
 
@@ -349,20 +424,31 @@ async def test_health_reported_primary_unavailable_skips_primary_generate_and_us
                 json={
                     "models": [
                         {
-                            "name": "models/gemini-2.5-flash-lite",
+                            "name": "models/gemini-3.6-flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": "models/gemini-flash-lite-latest",
                             "supportedGenerationMethods": ["generateContent"],
                         }
                     ]
                 },
             )
         post_paths.append(request.url.path)
+        if request.url.path.endswith("/gemini-3.6-flash:generateContent"):
+            return httpx.Response(
+                404,
+                request=request,
+                json=google_error(404, "NOT_FOUND", "primary is unavailable"),
+            )
         payload = gemini_payload()
-        payload["modelVersion"] = "gemini-2.5-flash-lite"
+        payload["modelVersion"] = "gemini-flash-lite-latest"
         return httpx.Response(200, request=request, json=payload)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         monitor = GeminiHealthMonitor(settings, client=client)
         await monitor.refresh()
+        post_paths.clear()
         quant = candidate()
         review = await AIAnalystService(
             settings,
@@ -372,7 +458,7 @@ async def test_health_reported_primary_unavailable_skips_primary_generate_and_us
 
     assert review.status == "OK"
     assert review.fallback_used
-    assert post_paths == ["/v1beta/models/gemini-2.5-flash-lite:generateContent"]
+    assert post_paths == ["/v1beta/models/gemini-flash-lite-latest:generateContent"]
     assert review.attempts[0].status_code == 404
 
 
@@ -409,22 +495,24 @@ async def test_telegram_gemini_diagnostics_are_compact_and_include_error_code() 
         )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            request=request,
-            json={
-                "models": [
-                    {
-                        "name": f"models/{settings.ai_model}",
-                        "supportedGenerationMethods": ["generateContent"],
-                    },
-                    {
-                        "name": f"models/{settings.ai_fallback_model}",
-                        "supportedGenerationMethods": ["generateContent"],
-                    },
-                ]
-            },
-        )
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "models": [
+                        {
+                            "name": f"models/{settings.ai_model}",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": f"models/{settings.ai_fallback_model}",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(200, request=request, json={"candidates": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         monitor = GeminiHealthMonitor(settings, factory, client=client)
@@ -434,6 +522,8 @@ async def test_telegram_gemini_diagnostics_are_compact_and_include_error_code() 
         )
 
     assert "API: <b>OK</b>" in text
+    assert "LISTED: <b>YES</b>" in text
+    assert "CALLABLE: <b>YES</b>" in text
     assert "Requests today: <b>2</b>" in text
     assert "Fallback used: <b>1</b>" in text
     assert "404 MODEL_NOT_FOUND" in text
@@ -453,24 +543,26 @@ class FakeGeminiMonitor:
         self.report = GeminiRuntimeHealth(
             provider="gemini",
             primary=GeminiHealthStatus(
-                "gemini",
-                "gemini-2.5-flash",
-                False,
-                True,
-                200,
-                "MODEL_NOT_FOUND",
-                "Configured model is absent",
-                checked_at,
+                provider="gemini",
+                configured_model="gemini-3.6-flash",
+                model_listed=True,
+                model_callable=False,
+                api_reachable=True,
+                status_code=404,
+                error_code="MODEL_NOT_FOUND",
+                error_message="Configured model is not callable",
+                checked_at=checked_at,
             ),
             fallback=GeminiHealthStatus(
-                "gemini",
-                "gemini-2.5-flash-lite",
-                True,
-                True,
-                200,
-                "",
-                "",
-                checked_at,
+                provider="gemini",
+                configured_model="gemini-flash-lite-latest",
+                model_listed=True,
+                model_callable=True,
+                api_reachable=True,
+                status_code=200,
+                error_code="",
+                error_message="",
+                checked_at=checked_at,
             ),
             api_status="DEGRADED",
             checked_at=checked_at,
@@ -513,8 +605,9 @@ async def test_gemini_status_callback_renders_live_provider_diagnostics() -> Non
     edits = [method for method in bot.methods if isinstance(method, EditMessageText)]
     assert edits
     assert "API: <b>DEGRADED</b>" in edits[-1].text
-    assert "Primary: <b>UNAVAILABLE</b>" in edits[-1].text
-    assert "Fallback: <b>AVAILABLE</b>" in edits[-1].text
+    assert "LISTED: <b>YES</b>" in edits[-1].text
+    assert "CALLABLE: <b>NO</b>" in edits[-1].text
+    assert "CALLABLE: <b>YES</b>" in edits[-1].text
     assert "404 MODEL_NOT_FOUND" in edits[-1].text
     await bot.session.close()
     await engine.dispose()

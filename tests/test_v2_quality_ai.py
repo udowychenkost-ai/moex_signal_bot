@@ -225,7 +225,7 @@ def gemini_payload(**overrides: object) -> dict[str, object]:
             "thoughtsTokenCount": 5,
             "totalTokenCount": 155,
         },
-        "modelVersion": "gemini-2.5-flash",
+        "modelVersion": "gemini-3.6-flash",
     }
 
 
@@ -242,8 +242,8 @@ def test_gemini_is_the_default_provider() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.ai_provider == "gemini"
-    assert settings.ai_model == "gemini-2.5-flash"
-    assert settings.ai_fallback_model == "gemini-2.5-flash-lite"
+    assert settings.ai_model == "gemini-3.6-flash"
+    assert settings.ai_fallback_model == "gemini-flash-lite-latest"
 
 
 @pytest.mark.asyncio
@@ -258,13 +258,13 @@ async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
     assert review.approved
     assert review.analysis.score == 82
     assert review.provider == "gemini"
-    assert review.model == "gemini-2.5-flash"
+    assert review.model == "gemini-3.6-flash"
     assert review.input_tokens == 100
     assert review.output_tokens == 55
     assert review.usage is not None
     request = client.requests[0]["json"]
     assert isinstance(request, dict)
-    assert client.requests[0]["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert client.requests[0]["url"].endswith("/models/gemini-3.6-flash:generateContent")
     assert client.requests[0]["headers"]["x-goog-api-key"] == "test"
     config = request["generationConfig"]
     assert config["responseMimeType"] == "application/json"
@@ -337,18 +337,18 @@ async def test_gemini_timeout_or_rate_limit_uses_flash_lite_once(
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     fallback_payload = gemini_payload()
-    fallback_payload["modelVersion"] = "gemini-2.5-flash-lite"
+    fallback_payload["modelVersion"] = "gemini-flash-lite-latest"
     client = FakeClient([primary_failure, fallback_payload])
 
     review = await AIAnalystService(settings, client=client).review(quant, quality)
 
     assert review.approved
     assert review.fallback_used
-    assert review.model == "gemini-2.5-flash-lite"
+    assert review.model == "gemini-flash-lite-latest"
     assert review.request_count == 2
     assert review.error_count == 1
     assert len(client.requests) == 2
-    assert client.requests[1]["url"].endswith("/models/gemini-2.5-flash-lite:generateContent")
+    assert client.requests[1]["url"].endswith("/models/gemini-flash-lite-latest:generateContent")
 
 
 @pytest.mark.asyncio
@@ -363,7 +363,7 @@ async def test_both_gemini_models_unavailable_is_not_reviewed_wait() -> None:
     assert review.analysis.verdict == "WAIT"
     assert review.status == "AI_NOT_REVIEWED"
     assert review.fallback_used
-    assert review.model == "gemini-2.5-flash-lite"
+    assert review.model == "gemini-flash-lite-latest"
     assert review.request_count == 2
     assert not review.approved
     assert len(client.requests) == 2
@@ -415,7 +415,7 @@ async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> Non
     quality = QualityGate(settings).evaluate(quant)
     apply_quality_result(quant, quality, strategy_version=settings.strategy_version)
     fallback_payload = gemini_payload()
-    fallback_payload["modelVersion"] = "gemini-2.5-flash-lite"
+    fallback_payload["modelVersion"] = "gemini-flash-lite-latest"
     review = await AIAnalystService(
         settings,
         client=FakeClient([httpx.ReadTimeout("primary"), fallback_payload]),
@@ -446,12 +446,12 @@ async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> Non
 
     assert stored is not None
     assert stored.ai_provider == "gemini"
-    assert stored.ai_model == "gemini-2.5-flash-lite"
+    assert stored.ai_model == "gemini-flash-lite-latest"
     assert stored.ai_fallback_used
     assert "attempts" in json.loads(stored.ai_usage_json)
     assert [(item.model, item.fallback_used) for item in requests] == [
-        ("gemini-2.5-flash", False),
-        ("gemini-2.5-flash-lite", True),
+        ("gemini-3.6-flash", False),
+        ("gemini-flash-lite-latest", True),
     ]
     assert json.loads(requests[1].usage_json)["totalTokenCount"] == 155
     await engine.dispose()
