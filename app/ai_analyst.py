@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, TypeVar
@@ -21,21 +22,35 @@ from app.quality import QualityGateResult
 logger = logging.getLogger(__name__)
 ShortItem = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 
-SYSTEM_PROMPT = """You are a conservative second-opinion analyst for MOEX paper ideas.
+RUSSIAN_OUTPUT_INSTRUCTION = """Все текстовые значения JSON, предназначенные для
+пользователя, пиши исключительно на русском языке. Не используй английский язык в
+rationale, reasons, risks, why_now, invalidation и других описательных полях. Биржевые
+тикеры, названия индикаторов и общепринятые обозначения вроде RSI, EMA20, EMA50, R:R,
+BUY, SELL можно оставлять без перевода."""
+
+SYSTEM_PROMPT = f"""You are a conservative second-opinion analyst for MOEX paper ideas.
 Use ONLY the structured data supplied by the application. Never invent news, financial
 figures, price levels, prices, events, forecasts, or missing indicators. Treat every
 missing block as unavailable. Quantitative filters have already run: you may reject or
 wait, but you must not rescue a weak quantitative signal. Focus on contradictions,
 timing, invalidation, and whether the evidence supports this direction now. Keep every
 text field concise. Scores are analytical ratings, never calibrated probabilities.
-Return only the requested structured result."""
+Return only the requested structured result.
+
+{RUSSIAN_OUTPUT_INSTRUCTION}"""
 
 STRUCTURED_RETRY_SUFFIX = """
 The previous response was incomplete or failed schema validation. Retry once from the
 supplied source data. Return exactly one complete JSON object and no surrounding text.
 Include every required field. Keep each scalar text field under 220 characters and each
 list item under 120 characters. Never copy or continue the previous partial response."""
+LANGUAGE_RETRY_SUFFIX = """
+LANGUAGE_MISMATCH: перепиши все пользовательские текстовые значения исключительно
+на русском языке. Не используй английские предложения или описания. Тикеры, BUY,
+SELL, RSI, EMA/SMA, IMOEX, R:R, числа и другие технические обозначения можно оставить
+без перевода. Верни один полный JSON-объект со всеми обязательными полями."""
 INVALID_STRUCTURED_RESPONSE = "INVALID_STRUCTURED_RESPONSE"
+LANGUAGE_MISMATCH = "LANGUAGE_MISMATCH"
 AnalysisModelT = TypeVar("AnalysisModelT", bound=BaseModel)
 
 
@@ -45,12 +60,36 @@ class AIAnalysis(BaseModel):
     verdict: Literal["STRONG_APPROVE", "APPROVE", "WAIT", "REJECT"]
     score: float = Field(ge=0, le=100)
     analysis_confidence: Literal["LOW", "MEDIUM", "HIGH"]
-    bull_case: str = Field(min_length=1, max_length=700)
-    bear_case: str = Field(min_length=1, max_length=700)
-    key_risks: list[ShortItem] = Field(min_length=1, max_length=3)
-    why_now: str = Field(min_length=1, max_length=700)
-    invalidation_conditions: list[ShortItem] = Field(min_length=1, max_length=3)
-    short_summary: str = Field(min_length=1, max_length=700)
+    bull_case: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Russian language only. Аргументы в пользу сценария.",
+    )
+    bear_case: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Russian language only. Аргументы против сценария.",
+    )
+    key_risks: list[ShortItem] = Field(
+        min_length=1,
+        max_length=3,
+        description="Russian language only. Главные риски без английских предложений.",
+    )
+    why_now: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Russian language only. Почему сценарий актуален сейчас.",
+    )
+    invalidation_conditions: list[ShortItem] = Field(
+        min_length=1,
+        max_length=3,
+        description="Russian language only. Условия отмены или инвалидации сценария.",
+    )
+    short_summary: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Russian language only. Краткое пользовательское резюме.",
+    )
 
     @property
     def ai_score(self) -> float:
@@ -66,7 +105,60 @@ class AIAnalysis(BaseModel):
 class MarketAIAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    short_summary: str = Field(min_length=1, max_length=700)
+    short_summary: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Russian language only. Краткое пользовательское резюме рынка.",
+    )
+
+
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:\d+)?")
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+# MOEX tickers are short uppercase symbols; indicator tokens may additionally
+# contain a numeric period (EMA20, SMA200). Longer uppercase prose must still be
+# counted as Latin text instead of being mistaken for a technical abbreviation.
+_TECHNICAL_TOKEN_RE = re.compile(r"^(?:[A-Z]{1,5}|[A-Z]{1,5}\d{1,4})$")
+
+
+def _language_counts(text: str) -> tuple[int, int]:
+    cyrillic_chars = len(_CYRILLIC_RE.findall(text))
+    latin_prose_chars = sum(
+        len(word)
+        for word in _LATIN_WORD_RE.findall(text)
+        if not _TECHNICAL_TOKEN_RE.fullmatch(word)
+    )
+    return cyrillic_chars, latin_prose_chars
+
+
+def _field_is_predominantly_non_russian(text: str) -> bool:
+    cyrillic_chars, latin_prose_chars = _language_counts(text)
+    if cyrillic_chars == 0 and _LATIN_WORD_RE.search(text):
+        return True
+    return latin_prose_chars >= 8 and latin_prose_chars > cyrillic_chars
+
+
+def _language_mismatch_fields(analysis: BaseModel) -> tuple[str, ...]:
+    values: list[tuple[str, str]] = []
+    if isinstance(analysis, AIAnalysis):
+        values.extend(
+            [
+                ("bull_case", analysis.bull_case),
+                ("bear_case", analysis.bear_case),
+                ("why_now", analysis.why_now),
+                ("short_summary", analysis.short_summary),
+            ]
+        )
+        values.extend(
+            (f"key_risks[{index}]", value)
+            for index, value in enumerate(analysis.key_risks)
+        )
+        values.extend(
+            (f"invalidation_conditions[{index}]", value)
+            for index, value in enumerate(analysis.invalidation_conditions)
+        )
+    elif isinstance(analysis, MarketAIAnalysis):
+        values.append(("short_summary", analysis.short_summary))
+    return tuple(name for name, value in values if _field_is_predominantly_non_russian(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +348,7 @@ def _validate_structured_result(
     if result.status != "OK":
         return None, result
     try:
-        return response_model.model_validate_json(result.text), result
+        analysis = response_model.model_validate_json(result.text)
     except (ValueError, ValidationError) as error:
         usage = dict(result.usage)
         usage["structured_response_valid"] = False
@@ -271,6 +363,26 @@ def _validate_structured_result(
             retryable=True,
             usage=usage,
         )
+    mismatch_fields = _language_mismatch_fields(analysis)
+    if mismatch_fields:
+        usage = dict(result.usage)
+        usage["structured_response_valid"] = True
+        usage["language_valid"] = False
+        usage["language_mismatch_fields"] = list(mismatch_fields)
+        usage["status_code"] = result.status_code
+        usage["error_code"] = LANGUAGE_MISMATCH
+        return None, replace(
+            result,
+            status="ERROR",
+            error=(
+                f"{LANGUAGE_MISMATCH}: user-facing fields must be Russian; "
+                f"fields={','.join(mismatch_fields)}"
+            )[:1_000],
+            error_code=LANGUAGE_MISMATCH,
+            retryable=True,
+            usage=usage,
+        )
+    return analysis, result
 
 
 def _attempt_error(attempts: tuple[AIRequestAttempt, ...]) -> str:
@@ -414,9 +526,9 @@ class AIAnalystService:
             fallback_used=fallback_used,
             retry_stage=retry_stage,
         )
-        if checked.error_code == INVALID_STRUCTURED_RESPONSE:
+        if checked.error_code in {INVALID_STRUCTURED_RESPONSE, LANGUAGE_MISMATCH}:
             logger.warning(
-                "AI structured response invalid provider=%s model=%s stage=%s "
+                "AI response validation failed provider=%s model=%s stage=%s "
                 "error_code=%s finish_reason=%s response_chars=%s",
                 checked.provider,
                 checked.model,
@@ -456,18 +568,31 @@ class AIAnalystService:
         if analysis is not None:
             return analysis, primary, tuple(attempts)
 
-        primary_structured_invalid = primary.error_code == INVALID_STRUCTURED_RESPONSE
-        if primary_structured_invalid and self.provider.name == "gemini":
+        primary_validation_error = primary.error_code in {
+            INVALID_STRUCTURED_RESPONSE,
+            LANGUAGE_MISMATCH,
+        }
+        retry_suffix = (
+            LANGUAGE_RETRY_SUFFIX
+            if primary.error_code == LANGUAGE_MISMATCH
+            else STRUCTURED_RETRY_SUFFIX
+        )
+        retry_stage = (
+            "PRIMARY_LANGUAGE_RETRY"
+            if primary.error_code == LANGUAGE_MISMATCH
+            else "PRIMARY_STRUCTURED_RETRY"
+        )
+        if primary_validation_error and self.provider.name == "gemini":
             analysis, retry, retry_attempt = await self._call_and_validate(
                 provider=self.provider,
                 response_model=response_model,
-                system_prompt=f"{system_prompt}\n\n{STRUCTURED_RETRY_SUFFIX}",
+                system_prompt=f"{system_prompt}\n\n{retry_suffix}",
                 payload=payload,
                 schema=schema,
                 schema_name=schema_name,
                 max_output_tokens=max_output_tokens,
                 fallback_used=False,
-                retry_stage="PRIMARY_STRUCTURED_RETRY",
+                retry_stage=retry_stage,
             )
             attempts.append(retry_attempt)
             if analysis is not None:
@@ -477,14 +602,14 @@ class AIAnalystService:
         should_fallback = bool(
             self.fallback_provider is not None
             and (
-                primary_structured_invalid
+                primary_validation_error
                 or (len(attempts) == 1 and primary.status != "OK" and primary.retryable)
             )
         )
         if should_fallback and self.fallback_provider is not None:
             fallback_prompt = (
-                f"{system_prompt}\n\n{STRUCTURED_RETRY_SUFFIX}"
-                if primary_structured_invalid
+                f"{system_prompt}\n\n{retry_suffix}"
+                if primary_validation_error
                 else system_prompt
             )
             analysis, fallback, fallback_attempt = await self._call_and_validate(
@@ -608,7 +733,8 @@ class AIAnalystService:
             system_prompt=(
                 "Explain the supplied calculated MOEX market snapshot in 2-4 concise "
                 "sentences. Use only supplied values. Do not invent news, events, prices, "
-                "fundamentals, or forecasts. Missing data is unavailable."
+                "fundamentals, or forecasts. Missing data is unavailable.\n\n"
+                f"{RUSSIAN_OUTPUT_INSTRUCTION}"
             ),
             payload=market_snapshot,
             schema=MarketAIAnalysis.model_json_schema(),

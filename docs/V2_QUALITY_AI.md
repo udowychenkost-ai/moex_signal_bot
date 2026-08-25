@@ -103,6 +103,15 @@ forecasts. Missing inputs are marked unavailable. The result schema contains:
 - `analysis_confidence`, `bull_case`, `bear_case`, `why_now`, `key_risks`,
   `invalidation_conditions` and `short_summary`.
 
+Every user-facing descriptive field is explicitly Russian-only in both the
+prompt and JSON Schema descriptions. Tickers, numeric values and established
+technical notation such as RSI, EMA/SMA, BUY/SELL, IMOEX and R:R may remain
+unchanged. Post-validation classifies predominantly non-Russian prose as
+`LANGUAGE_MISMATCH` and performs one primary structured retry with a stricter
+Russian-only instruction (`PRIMARY_LANGUAGE_RETRY`). If it still fails, the
+normal bounded fallback and fail-closed policy applies; English prose is not
+published to the user.
+
 Timeout/rate-limit/temporary-unavailable errors from the primary Gemini model
 permit exactly one request to `gemini-flash-lite-latest`. Truncated, malformed
 or schema-invalid JSON is marked `INVALID_STRUCTURED_RESPONSE`, retried once on

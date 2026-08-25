@@ -4,6 +4,15 @@
 
 ### Added
 
+- V2.1.4 requires Russian in every user-facing `AIAnalysis` and market-summary
+  text field at the prompt, JSON Schema description and post-validation levels.
+  Tickers, numeric values and technical notation such as RSI, EMA20, BUY, SELL,
+  IMOEX and R:R remain unchanged.
+- Predominantly non-Russian prose is classified as `LANGUAGE_MISMATCH` and gets
+  one bounded primary Russian-only structured retry. An English result is never
+  published or shown while a valid retry can recover it; normal fail-closed and
+  fallback behavior remains unchanged. No migration is required.
+
 - V2.1.3 hardens Gemini structured responses without changing QualityGate,
   scoring or lifecycle behavior. `AIAnalysis` requests now use a 4096-token
   output budget and Gemini 3.6 `thinkingLevel=minimal` for compact classifier

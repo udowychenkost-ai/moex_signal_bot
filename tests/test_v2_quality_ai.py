@@ -204,15 +204,26 @@ def analysis_body(**overrides: object) -> dict[str, object]:
         "verdict": "APPROVE",
         "score": 82,
         "analysis_confidence": "HIGH",
-        "bull_case": "Trend and volume agree.",
-        "bear_case": "Market reversal remains possible.",
-        "key_risks": ["Volatility expansion"],
-        "why_now": "Price is near confirmed support.",
-        "invalidation_conditions": ["Close below stop"],
-        "short_summary": "Independent factors support the setup.",
+        "bull_case": "Тренд и объём подтверждают сценарий.",
+        "bear_case": "Сохраняется риск разворота рынка.",
+        "key_risks": ["Расширение волатильности"],
+        "why_now": "Цена находится рядом с подтверждённой поддержкой.",
+        "invalidation_conditions": ["Закрытие ниже стоп-уровня"],
+        "short_summary": "Независимые факторы поддерживают торговый сценарий.",
     }
     body.update(overrides)
     return body
+
+
+def english_analysis_body() -> dict[str, object]:
+    return analysis_body(
+        bull_case="Strong bearish alignment is confirmed by market pressure.",
+        bear_case="A sudden market reversal can invalidate the setup.",
+        key_risks=["Volatility expansion", "Unexpected buying pressure"],
+        why_now="Price has moved below the key moving averages.",
+        invalidation_conditions=["Close above the resistance level"],
+        short_summary="The current evidence supports a bearish trading setup.",
+    )
 
 
 def gemini_payload(**overrides: object) -> dict[str, object]:
@@ -259,7 +270,7 @@ def test_gemini_is_the_default_provider() -> None:
     assert settings.ai_model == "gemini-3.6-flash"
     assert settings.ai_fallback_model == "gemini-flash-lite-latest"
     assert settings.ai_max_output_tokens == 4_096
-    assert settings.app_version == "0.5.3"
+    assert settings.app_version == "0.5.4"
 
 
 @pytest.mark.asyncio
@@ -295,6 +306,76 @@ async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
     assert "candles" not in snapshot
     assert "ohlcv" not in snapshot
     assert "Never invent" in request["systemInstruction"]["parts"][0]["text"]
+    assert "исключительно на русском языке" in request["systemInstruction"]["parts"][0]["text"]
+    for field in (
+        "bull_case",
+        "bear_case",
+        "key_risks",
+        "why_now",
+        "invalidation_conditions",
+        "short_summary",
+    ):
+        assert "Russian language only" in schema["properties"][field]["description"]
+
+
+@pytest.mark.asyncio
+async def test_fully_russian_ai_response_is_accepted_without_retry() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient(gemini_payload())
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.status == "OK"
+    assert review.request_count == 1
+    assert review.attempts[0].error_code == ""
+    assert review.analysis.bull_case == "Тренд и объём подтверждают сценарий."
+
+
+@pytest.mark.asyncio
+async def test_russian_response_with_technical_latin_tokens_is_accepted() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    payload = gemini_payload(
+        bull_case="Сценарий BUY подтверждают RSI и пересечение EMA20/EMA50.",
+        bear_case="Давление IMOEX может усилить движение SELL.",
+        key_risks=["Рост ATR и ухудшение R:R"],
+        why_now="Цена закрепилась ниже SMA50 при слабом IMOEX.",
+        invalidation_conditions=["Возврат выше EMA20"],
+        short_summary="Сценарий BUY остаётся технически подтверждённым.",
+    )
+    client = FakeClient(payload)
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.status == "OK"
+    assert review.request_count == 1
+    assert review.analysis.why_now == "Цена закрепилась ниже SMA50 при слабом IMOEX."
+
+
+@pytest.mark.asyncio
+async def test_english_ai_response_gets_one_russian_only_retry_and_succeeds() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    english = gemini_text_payload(json.dumps(english_analysis_body()))
+    client = FakeClient([english, gemini_payload()])
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.status == "OK"
+    assert review.request_count == 2
+    assert not review.fallback_used
+    assert review.attempts[0].error_code == "LANGUAGE_MISMATCH"
+    assert review.attempts[0].retry_stage == "PRIMARY"
+    assert review.attempts[1].retry_stage == "PRIMARY_LANGUAGE_RETRY"
+    assert "Strong bearish alignment" not in review.error
+    retry_prompt = client.requests[1]["json"]["systemInstruction"]["parts"][0]["text"]
+    assert "LANGUAGE_MISMATCH" in retry_prompt
+    assert "исключительно" in retry_prompt
+    assert review.analysis.short_summary.startswith("Независимые факторы")
 
 
 @pytest.mark.asyncio

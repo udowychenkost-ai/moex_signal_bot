@@ -219,6 +219,14 @@ Structured validation errors имеют отдельный код
 `PRIMARY`, `PRIMARY_STRUCTURED_RETRY` или `FALLBACK`; raw model text в БД и логи
 не записывается.
 
+Все пользовательские описательные поля Gemini возвращаются на русском языке;
+тикеры, числа и технические обозначения вроде RSI, EMA20, BUY, SELL, IMOEX и R:R
+остаются без перевода. Преимущественно англоязычный ответ получает код
+`LANGUAGE_MISMATCH` и один повторный structured-запрос на primary с явной
+инструкцией Russian only (`PRIMARY_LANGUAGE_RETRY`). Если исправить язык не
+удалось, действует прежняя fallback/fail-closed политика, поэтому английский
+текст пользователю не публикуется.
+
 При старте Gemini сначала сверяется с `v1beta/models`, затем для каждой модели
 выполняется минимальный structured `generateContent` probe. Наличие в ListModels
 означает только `LISTED`; доступной модель считается только при `CALLABLE=YES`.
