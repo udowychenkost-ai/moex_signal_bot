@@ -87,6 +87,7 @@ async def test_real_http_contract_primary_gemini_success() -> None:
         config = body["generationConfig"]
         assert config["responseMimeType"] == "application/json"
         assert config["responseJsonSchema"]["type"] == "object"
+        assert config["thinkingConfig"] == {"thinkingLevel": "minimal"}
         assert "temperature" not in config
         return httpx.Response(200, request=request, json=gemini_payload())
 
@@ -255,8 +256,11 @@ async def test_rate_limit_and_timeout_remain_fallback_eligible(failure: str) -> 
 @pytest.mark.asyncio
 async def test_invalid_structured_json_remains_provider_success_but_analysis_fails_closed() -> None:
     settings = Settings(_env_file=None, gemini_api_key="test")
+    calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(
             200,
             request=request,
@@ -272,6 +276,12 @@ async def test_invalid_structured_json_remains_provider_success_but_analysis_fai
 
     assert review.status == "AI_NOT_REVIEWED"
     assert review.analysis.verdict == "WAIT"
+    assert review.request_count == 3
+    assert review.fallback_used
+    assert all(
+        attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts
+    )
+    assert calls == 3
 
 
 @pytest.mark.asyncio
@@ -301,6 +311,7 @@ async def test_provider_health_uses_list_models_and_validates_generate_content()
         body = json.loads(request.content)
         assert body["generationConfig"]["responseMimeType"] == "application/json"
         assert body["generationConfig"]["maxOutputTokens"] == 32
+        assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
         return httpx.Response(200, request=request, json={"candidates": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:

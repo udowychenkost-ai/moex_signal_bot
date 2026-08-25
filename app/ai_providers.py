@@ -142,6 +142,24 @@ def _normalized_gemini_base_url(base_url: str) -> str:
     return value.removesuffix("/models")
 
 
+def _gemini_generation_config(
+    model: str,
+    *,
+    schema: dict[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "responseMimeType": "application/json",
+        "responseJsonSchema": _gemini_schema(schema),
+        "maxOutputTokens": max_output_tokens,
+    }
+    # Gemini 3.6 supports `minimal` for classification-style generateContent calls.
+    # The current Flash-Lite latest alias also resolves to a minimal-capable model.
+    if model.startswith("gemini-3.") or model == "gemini-flash-lite-latest":
+        config["thinkingConfig"] = {"thinkingLevel": "minimal"}
+    return config
+
+
 def _google_error(response: Any) -> tuple[int | None, str, str, bool]:
     status_code = getattr(response, "status_code", None)
     payload: dict[str, Any] = {}
@@ -383,16 +401,16 @@ class GeminiProvider:
                             "parts": [{"text": 'Return exactly this JSON: {"ok": true}'}],
                         }
                     ],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseJsonSchema": {
+                    "generationConfig": _gemini_generation_config(
+                        self.model,
+                        schema={
                             "type": "object",
                             "properties": {"ok": {"type": "boolean"}},
                             "required": ["ok"],
                             "additionalProperties": False,
                         },
-                        "maxOutputTokens": 32,
-                    },
+                        max_output_tokens=32,
+                    ),
                 },
             )
             api_reachable = True
@@ -498,11 +516,11 @@ class GeminiProvider:
                     ],
                 }
             ],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseJsonSchema": _gemini_schema(schema),
-                "maxOutputTokens": max_output_tokens,
-            },
+            "generationConfig": _gemini_generation_config(
+                self.model,
+                schema=schema,
+                max_output_tokens=max_output_tokens,
+            ),
         }
         started = perf_counter()
         own_client = self.client is None
@@ -518,8 +536,8 @@ class GeminiProvider:
             response_payload = response.json()
             if not isinstance(response_payload, dict):
                 raise ValueError("Gemini response must be a JSON object")
-            usage = response_payload.get("usageMetadata") or {}
-            usage = usage if isinstance(usage, dict) else {}
+            raw_usage = response_payload.get("usageMetadata") or {}
+            usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
             input_tokens = int(usage.get("promptTokenCount") or 0)
             output_tokens = int(usage.get("candidatesTokenCount") or 0) + int(
                 usage.get("thoughtsTokenCount") or 0
@@ -529,15 +547,24 @@ class GeminiProvider:
                 + output_tokens * self.output_cost_per_million
             ) / 1_000_000
             exact_model = response_payload.get("modelVersion")
+            text = _gemini_response_text(response_payload)
+            candidates = response_payload.get("candidates")
+            first_candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+            if isinstance(first_candidate, dict):
+                finish_reason = first_candidate.get("finishReason")
+                if isinstance(finish_reason, str) and finish_reason:
+                    usage["finishReason"] = finish_reason
+            usage["responseChars"] = len(text)
             return ProviderCallResult(
                 provider=self.name,
                 model=exact_model if isinstance(exact_model, str) else self.model,
                 status="OK",
-                text=_gemini_response_text(response_payload),
+                text=text,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 estimated_cost_usd=round(cost, 8),
                 latency_ms=round((perf_counter() - started) * 1_000),
+                status_code=int(getattr(response, "status_code", 200)),
                 usage=usage,
             )
         except httpx.HTTPStatusError as error:

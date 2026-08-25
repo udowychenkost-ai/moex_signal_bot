@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
@@ -29,6 +29,14 @@ wait, but you must not rescue a weak quantitative signal. Focus on contradiction
 timing, invalidation, and whether the evidence supports this direction now. Keep every
 text field concise. Scores are analytical ratings, never calibrated probabilities.
 Return only the requested structured result."""
+
+STRUCTURED_RETRY_SUFFIX = """
+The previous response was incomplete or failed schema validation. Retry once from the
+supplied source data. Return exactly one complete JSON object and no surrounding text.
+Include every required field. Keep each scalar text field under 220 characters and each
+list item under 120 characters. Never copy or continue the previous partial response."""
+INVALID_STRUCTURED_RESPONSE = "INVALID_STRUCTURED_RESPONSE"
+AnalysisModelT = TypeVar("AnalysisModelT", bound=BaseModel)
 
 
 class AIAnalysis(BaseModel):
@@ -75,6 +83,7 @@ class AIRequestAttempt:
     error_code: str = ""
     model_unavailable: bool = False
     fallback_used: bool = False
+    retry_stage: str = "PRIMARY"
     usage: dict[str, Any] | None = None
 
 
@@ -196,7 +205,17 @@ def structured_snapshot(
     }
 
 
-def _attempt(result: ProviderCallResult, *, fallback_used: bool) -> AIRequestAttempt:
+def _attempt(
+    result: ProviderCallResult,
+    *,
+    fallback_used: bool,
+    retry_stage: str,
+) -> AIRequestAttempt:
+    usage = dict(result.usage)
+    usage["retry_stage"] = retry_stage
+    usage["fallback_used"] = fallback_used
+    usage["status_code"] = result.status_code
+    usage["error_code"] = result.error_code
     return AIRequestAttempt(
         provider=result.provider,
         model=result.model,
@@ -210,8 +229,48 @@ def _attempt(result: ProviderCallResult, *, fallback_used: bool) -> AIRequestAtt
         error_code=result.error_code,
         model_unavailable=result.model_unavailable,
         fallback_used=fallback_used,
-        usage=result.usage,
+        retry_stage=retry_stage,
+        usage=usage,
     )
+
+
+def _structured_validation_error(error: Exception, *, response_chars: int) -> str:
+    issues: list[str] = []
+    if isinstance(error, ValidationError):
+        for item in error.errors(include_url=False, include_input=False)[:5]:
+            location = ".".join(str(part) for part in item.get("loc", ())) or "root"
+            issues.append(f"{location}: {item.get('msg', 'validation error')}")
+    if not issues:
+        issues.append(type(error).__name__)
+    detail = "; ".join(issues)
+    return (
+        f"structured response validation failed: {INVALID_STRUCTURED_RESPONSE}; "
+        f"response_chars={response_chars}; {detail}"
+    )[:1_000]
+
+
+def _validate_structured_result(
+    result: ProviderCallResult,
+    response_model: type[AnalysisModelT],
+) -> tuple[AnalysisModelT | None, ProviderCallResult]:
+    if result.status != "OK":
+        return None, result
+    try:
+        return response_model.model_validate_json(result.text), result
+    except (ValueError, ValidationError) as error:
+        usage = dict(result.usage)
+        usage["structured_response_valid"] = False
+        usage["responseChars"] = len(result.text)
+        usage["status_code"] = result.status_code
+        usage["error_code"] = INVALID_STRUCTURED_RESPONSE
+        return None, replace(
+            result,
+            status="ERROR",
+            error=_structured_validation_error(error, response_chars=len(result.text)),
+            error_code=INVALID_STRUCTURED_RESPONSE,
+            retryable=True,
+            usage=usage,
+        )
 
 
 def _attempt_error(attempts: tuple[AIRequestAttempt, ...]) -> str:
@@ -229,6 +288,7 @@ def _attempt_usage(attempts: tuple[AIRequestAttempt, ...]) -> dict[str, Any]:
                 "provider": attempt.provider,
                 "model": attempt.model,
                 "fallback_used": attempt.fallback_used,
+                "retry_stage": attempt.retry_stage,
                 "status_code": attempt.status_code,
                 "error_code": attempt.error_code,
                 "model_unavailable": attempt.model_unavailable,
@@ -309,34 +369,138 @@ class AIAnalystService:
             reviewed_at=datetime.now(UTC),
         )
 
-    async def _generate(
+    async def _call_provider(
         self,
         *,
+        provider: AIProvider,
         system_prompt: str,
         payload: dict[str, object],
         schema: dict[str, Any],
         schema_name: str,
         max_output_tokens: int,
-    ) -> tuple[ProviderCallResult, tuple[AIRequestAttempt, ...]]:
-        primary = await self.provider.generate(
+    ) -> ProviderCallResult:
+        return await provider.generate(
             system_prompt=system_prompt,
             payload=payload,
             schema=schema,
             schema_name=schema_name,
             max_output_tokens=max_output_tokens,
         )
-        attempts = [_attempt(primary, fallback_used=False)]
-        final = primary
-        if primary.status != "OK" and primary.retryable and self.fallback_provider is not None:
-            final = await self.fallback_provider.generate(
-                system_prompt=system_prompt,
+
+    async def _call_and_validate(
+        self,
+        *,
+        provider: AIProvider,
+        response_model: type[AnalysisModelT],
+        system_prompt: str,
+        payload: dict[str, object],
+        schema: dict[str, Any],
+        schema_name: str,
+        max_output_tokens: int,
+        fallback_used: bool,
+        retry_stage: str,
+    ) -> tuple[AnalysisModelT | None, ProviderCallResult, AIRequestAttempt]:
+        raw = await self._call_provider(
+            provider=provider,
+            system_prompt=system_prompt,
+            payload=payload,
+            schema=schema,
+            schema_name=schema_name,
+            max_output_tokens=max_output_tokens,
+        )
+        analysis, checked = _validate_structured_result(raw, response_model)
+        attempt = _attempt(
+            checked,
+            fallback_used=fallback_used,
+            retry_stage=retry_stage,
+        )
+        if checked.error_code == INVALID_STRUCTURED_RESPONSE:
+            logger.warning(
+                "AI structured response invalid provider=%s model=%s stage=%s "
+                "error_code=%s finish_reason=%s response_chars=%s",
+                checked.provider,
+                checked.model,
+                retry_stage,
+                checked.error_code,
+                checked.usage.get("finishReason", "unknown"),
+                checked.usage.get("responseChars", 0),
+            )
+        return analysis, checked, attempt
+
+    async def _generate_structured(
+        self,
+        *,
+        response_model: type[AnalysisModelT],
+        system_prompt: str,
+        payload: dict[str, object],
+        schema: dict[str, Any],
+        schema_name: str,
+        max_output_tokens: int,
+    ) -> tuple[
+        AnalysisModelT | None,
+        ProviderCallResult,
+        tuple[AIRequestAttempt, ...],
+    ]:
+        analysis, primary, primary_attempt = await self._call_and_validate(
+            provider=self.provider,
+            response_model=response_model,
+            system_prompt=system_prompt,
+            payload=payload,
+            schema=schema,
+            schema_name=schema_name,
+            max_output_tokens=max_output_tokens,
+            fallback_used=False,
+            retry_stage="PRIMARY",
+        )
+        attempts = [primary_attempt]
+        if analysis is not None:
+            return analysis, primary, tuple(attempts)
+
+        primary_structured_invalid = primary.error_code == INVALID_STRUCTURED_RESPONSE
+        if primary_structured_invalid and self.provider.name == "gemini":
+            analysis, retry, retry_attempt = await self._call_and_validate(
+                provider=self.provider,
+                response_model=response_model,
+                system_prompt=f"{system_prompt}\n\n{STRUCTURED_RETRY_SUFFIX}",
                 payload=payload,
                 schema=schema,
                 schema_name=schema_name,
                 max_output_tokens=max_output_tokens,
+                fallback_used=False,
+                retry_stage="PRIMARY_STRUCTURED_RETRY",
             )
-            attempts.append(_attempt(final, fallback_used=True))
-        return final, tuple(attempts)
+            attempts.append(retry_attempt)
+            if analysis is not None:
+                return analysis, retry, tuple(attempts)
+            primary = retry
+
+        should_fallback = bool(
+            self.fallback_provider is not None
+            and (
+                primary_structured_invalid
+                or (len(attempts) == 1 and primary.status != "OK" and primary.retryable)
+            )
+        )
+        if should_fallback and self.fallback_provider is not None:
+            fallback_prompt = (
+                f"{system_prompt}\n\n{STRUCTURED_RETRY_SUFFIX}"
+                if primary_structured_invalid
+                else system_prompt
+            )
+            analysis, fallback, fallback_attempt = await self._call_and_validate(
+                provider=self.fallback_provider,
+                response_model=response_model,
+                system_prompt=fallback_prompt,
+                payload=payload,
+                schema=schema,
+                schema_name=schema_name,
+                max_output_tokens=max_output_tokens,
+                fallback_used=True,
+                retry_stage="FALLBACK",
+            )
+            attempts.append(fallback_attempt)
+            return analysis, fallback, tuple(attempts)
+        return None, primary, tuple(attempts)
 
     def _review_result(
         self,
@@ -355,7 +519,7 @@ class AIAnalystService:
             latency_ms=sum(attempt.latency_ms for attempt in attempts),
             error=_attempt_error(attempts),
             reviewed_at=datetime.now(UTC),
-            fallback_used=len(attempts) > 1,
+            fallback_used=any(attempt.fallback_used for attempt in attempts),
             usage=_attempt_usage(attempts),
             attempts=attempts,
         )
@@ -377,7 +541,7 @@ class AIAnalystService:
             latency_ms=sum(attempt.latency_ms for attempt in attempts),
             error=message[:2_000],
             reviewed_at=datetime.now(UTC),
-            fallback_used=len(attempts) > 1,
+            fallback_used=any(attempt.fallback_used for attempt in attempts),
             usage=_attempt_usage(attempts),
             attempts=attempts,
         )
@@ -392,28 +556,18 @@ class AIAnalystService:
         if not self.settings.ai_filter_enabled:
             return self._configured_failure("AI filter is disabled")
 
-        final, attempts = await self._generate(
+        analysis, final, attempts = await self._generate_structured(
+            response_model=AIAnalysis,
             system_prompt=SYSTEM_PROMPT,
             payload=structured_snapshot(candidate, quality),
             schema=AIAnalysis.model_json_schema(),
             schema_name="moex_ai_verdict",
             max_output_tokens=self.settings.ai_max_output_tokens,
         )
-        if final.status != "OK":
+        if analysis is None:
             logger.warning(
                 "AI review failed for %s: %s", candidate.ticker, _attempt_error(attempts)
             )
-            return self._failed_review(final, attempts)
-        try:
-            analysis = AIAnalysis.model_validate_json(final.text)
-        except (ValueError, ValidationError) as error:
-            invalid = replace(
-                attempts[-1],
-                status="ERROR",
-                error=f"structured response validation failed: {error}"[:2_000],
-            )
-            attempts = (*attempts[:-1], invalid)
-            logger.warning("AI review schema validation failed for %s: %s", candidate.ticker, error)
             return self._failed_review(final, attempts)
         return self._review_result(analysis, final, attempts)
 
@@ -430,40 +584,27 @@ class AIAnalystService:
                 "quality_gate_reasons": list(quality.reasons),
             }
         )
-        final, attempts = await self._generate(
+        analysis, final, attempts = await self._generate_structured(
+            response_model=AIAnalysis,
             system_prompt=SYSTEM_PROMPT,
             payload=payload,
             schema=AIAnalysis.model_json_schema(),
             schema_name="moex_ai_verdict",
             max_output_tokens=self.settings.ai_max_output_tokens,
         )
-        if final.status != "OK":
+        if analysis is None:
             logger.warning(
                 "Current AI review failed for %s: %s",
                 candidate.ticker,
                 _attempt_error(attempts),
             )
             return self._failed_review(final, attempts)
-        try:
-            analysis = AIAnalysis.model_validate_json(final.text)
-        except (ValueError, ValidationError) as error:
-            invalid = replace(
-                attempts[-1],
-                status="ERROR",
-                error=f"structured response validation failed: {error}"[:2_000],
-            )
-            attempts = (*attempts[:-1], invalid)
-            logger.warning(
-                "Current AI review schema validation failed for %s: %s",
-                candidate.ticker,
-                error,
-            )
-            return self._failed_review(final, attempts)
         return self._review_result(analysis, final, attempts)
 
     async def summarize_market(self, market_snapshot: dict[str, object]) -> MarketAIReviewResult:
         unavailable = "AI summary unavailable; deterministic market metrics remain available."
-        final, attempts = await self._generate(
+        analysis, final, attempts = await self._generate_structured(
+            response_model=MarketAIAnalysis,
             system_prompt=(
                 "Explain the supplied calculated MOEX market snapshot in 2-4 concise "
                 "sentences. Use only supplied values. Do not invent news, events, prices, "
@@ -472,21 +613,8 @@ class AIAnalystService:
             payload=market_snapshot,
             schema=MarketAIAnalysis.model_json_schema(),
             schema_name="moex_market_summary",
-            max_output_tokens=min(self.settings.ai_max_output_tokens, 300),
+            max_output_tokens=min(self.settings.ai_max_output_tokens, 1_024),
         )
-        analysis: MarketAIAnalysis | None = None
-        if final.status == "OK":
-            try:
-                analysis = MarketAIAnalysis.model_validate_json(final.text)
-            except (ValueError, ValidationError) as error:
-                attempts = (
-                    *attempts[:-1],
-                    replace(
-                        attempts[-1],
-                        status="ERROR",
-                        error=f"structured response validation failed: {error}"[:2_000],
-                    ),
-                )
         status = "OK" if analysis is not None else "AI_NOT_REVIEWED"
         error = _attempt_error(attempts)
         return MarketAIReviewResult(
@@ -500,7 +628,7 @@ class AIAnalystService:
             latency_ms=sum(attempt.latency_ms for attempt in attempts),
             error=error,
             reviewed_at=datetime.now(UTC),
-            fallback_used=len(attempts) > 1,
+            fallback_used=any(attempt.fallback_used for attempt in attempts),
             usage=_attempt_usage(attempts),
             attempts=attempts,
         )

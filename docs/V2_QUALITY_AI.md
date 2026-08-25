@@ -86,7 +86,12 @@ alternative. Both adapters use a Pydantic-generated JSON schema, a bounded
 output budget and only the same compact decision snapshot. Gemini uses
 `responseMimeType=application/json` plus `responseJsonSchema`; unsupported
 Pydantic validation keywords are removed from the wire schema and validated
-locally after receipt. API details: [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
+locally after receipt. The JSON Schema field is intentional: the current REST
+reference deprecates the older OpenAPI-subset `responseSchema` form. `AIAnalysis`
+has a 4096-token output ceiling and Gemini
+3.6 uses `thinkingConfig.thinkingLevel=minimal`, which is the supported
+classifier-oriented setting rather than an unsupported attempt to disable
+thinking. API details: [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
 [Gemini Flash-Lite latest alias](https://ai.google.dev/gemini-api/docs/models)
 and [API errors](https://ai.google.dev/gemini-api/docs/generate-content/api-errors).
 
@@ -99,13 +104,17 @@ forecasts. Missing inputs are marked unavailable. The result schema contains:
   `invalidation_conditions` and `short_summary`.
 
 Timeout/rate-limit/temporary-unavailable errors from the primary Gemini model
-permit exactly one request to `gemini-flash-lite-latest`. No fallback is attempted
-for malformed JSON, schema mismatch, authentication/configuration errors or
-other permanent failures. If no valid review is received, the result is
+permit exactly one request to `gemini-flash-lite-latest`. Truncated, malformed
+or schema-invalid JSON is marked `INVALID_STRUCTURED_RESPONSE`, retried once on
+the primary with a stricter compact instruction, and then tried once on Flash
+Lite. Authentication/configuration errors remain non-retryable. If no valid
+review is received, the result is
 `AI_NOT_REVIEWED / WAIT`. Request provider, exact returned model, raw usage,
-input/output tokens, estimated cost, latency, error and `fallback_used` are
+input/output tokens, estimated cost, latency, error, `fallback_used` and retry
+stage are
 stored per attempt in `ai_request_logs` and summarized in the frozen candidate
-row. Only a quantitative `PASS` can invoke AI; AI cannot rescue `WEAK/REJECT`.
+row. Model text is not persisted. Only a quantitative `PASS` can invoke AI; AI
+cannot rescue `WEAK/REJECT`.
 
 ## Telegram UX
 

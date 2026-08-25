@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.5.2"
+    app_version: str = "0.5.3"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     ai_model: str = "gemini-3.6-flash"
     ai_fallback_model: str = "gemini-flash-lite-latest"
     ai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
-    ai_max_output_tokens: int = Field(default=700, ge=100, le=4_000)
+    ai_max_output_tokens: int = Field(default=4_096, ge=1_024, le=8_192)
     ai_input_cost_per_million: float = Field(default=0.30, ge=0)
     ai_output_cost_per_million: float = Field(default=2.50, ge=0)
     ai_fallback_input_cost_per_million: float = Field(default=0.18, ge=0)

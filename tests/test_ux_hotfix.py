@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -8,7 +10,7 @@ from aiogram.methods import EditMessageText, SendMessage
 from aiogram.types import Chat, Message, Update, User
 from sqlalchemy import select
 
-from app.ai_analyst import AIAnalysis, AIReviewResult
+from app.ai_analyst import AIAnalysis, AIRequestAttempt, AIReviewResult
 from app.ai_ux import (
     AI_VERDICT_LABELS,
     format_current_ai_analysis,
@@ -158,7 +160,57 @@ class FakeAnalyst:
 async def test_on_demand_analysis_preserves_idea_and_immutable_snapshot() -> None:
     engine, factory, idea_id = await seeded_context()
     current_candidate = candidate()
-    review = successful_review()
+    attempts = (
+        AIRequestAttempt(
+            provider="gemini",
+            model="gemini-3.6-flash",
+            status="ERROR",
+            input_tokens=100,
+            output_tokens=700,
+            estimated_cost_usd=0.001,
+            latency_ms=5_200,
+            error="structured response validation failed: INVALID_STRUCTURED_RESPONSE",
+            status_code=200,
+            error_code="INVALID_STRUCTURED_RESPONSE",
+            retry_stage="PRIMARY",
+            usage={"retry_stage": "PRIMARY", "error_code": "INVALID_STRUCTURED_RESPONSE"},
+        ),
+        AIRequestAttempt(
+            provider="gemini",
+            model="gemini-3.6-flash",
+            status="ERROR",
+            input_tokens=100,
+            output_tokens=50,
+            estimated_cost_usd=0.001,
+            latency_ms=500,
+            error="structured response validation failed: INVALID_STRUCTURED_RESPONSE",
+            status_code=200,
+            error_code="INVALID_STRUCTURED_RESPONSE",
+            retry_stage="PRIMARY_STRUCTURED_RETRY",
+            usage={
+                "retry_stage": "PRIMARY_STRUCTURED_RETRY",
+                "error_code": "INVALID_STRUCTURED_RESPONSE",
+            },
+        ),
+        AIRequestAttempt(
+            provider="gemini",
+            model="gemini-flash-lite-latest",
+            status="OK",
+            input_tokens=100,
+            output_tokens=50,
+            estimated_cost_usd=0.001,
+            latency_ms=400,
+            fallback_used=True,
+            retry_stage="FALLBACK",
+            usage={"retry_stage": "FALLBACK", "error_code": ""},
+        ),
+    )
+    review = replace(
+        successful_review(),
+        model="gemini-flash-lite-latest",
+        fallback_used=True,
+        attempts=attempts,
+    )
     ingestion = FakeIngestion()
     analyst = FakeAnalyst(review)
     settings = Settings(_env_file=None, market_context_enabled=False)
@@ -193,7 +245,9 @@ async def test_on_demand_analysis_preserves_idea_and_immutable_snapshot() -> Non
         snapshot = await session.get(TradingIdeaSnapshot, idea_id)
         logs = list(
             await session.scalars(
-                select(AIRequestLog).where(AIRequestLog.request_kind == "ON_DEMAND_IDEA")
+                select(AIRequestLog)
+                .where(AIRequestLog.request_kind == "ON_DEMAND_IDEA")
+                .order_by(AIRequestLog.id)
             )
         )
     assert stored is not None and snapshot is not None
@@ -209,8 +263,17 @@ async def test_on_demand_analysis_preserves_idea_and_immutable_snapshot() -> Non
         snapshot.ai_provider,
         snapshot.total_score,
     ) == before_snapshot
-    assert len(logs) == 1
-    assert logs[0].provider == "gemini"
+    assert len(logs) == 3
+    assert [row.model for row in logs] == [
+        "gemini-3.6-flash",
+        "gemini-3.6-flash",
+        "gemini-flash-lite-latest",
+    ]
+    assert [json.loads(row.usage_json)["retry_stage"] for row in logs] == [
+        "PRIMARY",
+        "PRIMARY_STRUCTURED_RETRY",
+        "FALLBACK",
+    ]
     assert "AI-анализ выполнен сейчас" in format_current_ai_analysis(review, current_candidate)
     await engine.dispose()
 

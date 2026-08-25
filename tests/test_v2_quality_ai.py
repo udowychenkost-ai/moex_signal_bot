@@ -217,15 +217,29 @@ def analysis_body(**overrides: object) -> dict[str, object]:
 
 def gemini_payload(**overrides: object) -> dict[str, object]:
     body = analysis_body(**overrides)
+    return gemini_text_payload(json.dumps(body))
+
+
+def gemini_text_payload(
+    text: str,
+    *,
+    model: str = "gemini-3.6-flash",
+    finish_reason: str = "STOP",
+) -> dict[str, object]:
     return {
-        "candidates": [{"content": {"parts": [{"text": json.dumps(body)}]}}],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": text}]},
+                "finishReason": finish_reason,
+            }
+        ],
         "usageMetadata": {
             "promptTokenCount": 100,
             "candidatesTokenCount": 50,
             "thoughtsTokenCount": 5,
             "totalTokenCount": 155,
         },
-        "modelVersion": "gemini-3.6-flash",
+        "modelVersion": model,
     }
 
 
@@ -244,6 +258,8 @@ def test_gemini_is_the_default_provider() -> None:
     assert settings.ai_provider == "gemini"
     assert settings.ai_model == "gemini-3.6-flash"
     assert settings.ai_fallback_model == "gemini-flash-lite-latest"
+    assert settings.ai_max_output_tokens == 4_096
+    assert settings.app_version == "0.5.3"
 
 
 @pytest.mark.asyncio
@@ -268,6 +284,9 @@ async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
     assert client.requests[0]["headers"]["x-goog-api-key"] == "test"
     config = request["generationConfig"]
     assert config["responseMimeType"] == "application/json"
+    assert config["maxOutputTokens"] == 4_096
+    assert config["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    assert "responseSchema" not in config
     schema = config["responseJsonSchema"]
     assert {"score", "analysis_confidence"}.issubset(schema["properties"])
     assert "ai_score" not in schema["properties"]
@@ -298,28 +317,141 @@ async def test_current_gemini_review_reuses_contract_and_includes_quality_contex
 
 
 @pytest.mark.asyncio
+async def test_truncated_ai_analysis_retries_primary_once_with_compact_prompt() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    truncated = gemini_text_payload(
+        '{"verdict":"REJECT","score":25.',
+        finish_reason="MAX_TOKENS",
+    )
+    client = FakeClient([truncated, gemini_payload(verdict="REJECT", score=25)])
+
+    review = await AIAnalystService(settings, client=client).review_current(quant, quality)
+
+    assert review.status == "OK"
+    assert review.analysis.verdict == "REJECT"
+    assert review.request_count == 2
+    assert not review.fallback_used
+    assert [attempt.retry_stage for attempt in review.attempts] == [
+        "PRIMARY",
+        "PRIMARY_STRUCTURED_RETRY",
+    ]
+    assert review.attempts[0].error_code == "INVALID_STRUCTURED_RESPONSE"
+    assert review.attempts[0].status_code == 200
+    assert review.attempts[0].usage is not None
+    assert review.attempts[0].usage["finishReason"] == "MAX_TOKENS"
+    assert '{"verdict":"REJECT"' not in review.attempts[0].error
+    assert "previous response was incomplete" in str(
+        client.requests[1]["json"]["systemInstruction"]["parts"][0]["text"]
+    ).lower()
+    schema = client.requests[0]["json"]["generationConfig"]["responseJsonSchema"]
+    assert set(schema["required"]) == set(AIAnalysis.model_json_schema()["required"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "payload",
+    ("first_text", "expected_issue"),
     [
-        {"candidates": [{"content": {"parts": [{"text": "not-json"}]}}]},
-        gemini_payload(verdict="MAYBE"),
+        pytest.param("not-json", "root:", id="malformed-json"),
+        pytest.param(
+            json.dumps({"verdict": "REJECT", "score": 25}),
+            "analysis_confidence:",
+            id="missing-required-fields",
+        ),
+        pytest.param(
+            json.dumps(analysis_body(verdict="MAYBE")),
+            "verdict:",
+            id="invalid-enum",
+        ),
     ],
 )
-async def test_gemini_malformed_or_invalid_enum_fails_closed_without_fallback(
-    payload: dict[str, object],
+async def test_invalid_structured_response_is_classified_then_retry_succeeds(
+    first_text: str,
+    expected_issue: str,
 ) -> None:
     settings = Settings(_env_file=None, gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient([gemini_text_payload(first_text), gemini_payload()])
 
-    client = FakeClient(payload)
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.status == "OK"
+    assert review.approved
+    assert review.request_count == 2
+    assert review.error_count == 1
+    assert review.attempts[0].error_code == "INVALID_STRUCTURED_RESPONSE"
+    assert expected_issue in review.attempts[0].error
+    assert not review.fallback_used
+
+
+@pytest.mark.asyncio
+async def test_primary_invalid_retry_invalid_then_fallback_succeeds_once() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    fallback = gemini_text_payload(
+        json.dumps(analysis_body()),
+        model="gemini-flash-lite-latest",
+    )
+    client = FakeClient(
+        [
+            gemini_text_payload('{"verdict":"REJECT","score":25.'),
+            gemini_text_payload("not-json"),
+            fallback,
+        ]
+    )
+
+    review = await AIAnalystService(settings, client=client).review(quant, quality)
+
+    assert review.status == "OK"
+    assert review.approved
+    assert review.fallback_used
+    assert review.model == "gemini-flash-lite-latest"
+    assert review.request_count == 3
+    assert review.error_count == 2
+    assert [attempt.retry_stage for attempt in review.attempts] == [
+        "PRIMARY",
+        "PRIMARY_STRUCTURED_RETRY",
+        "FALLBACK",
+    ]
+    assert [attempt.fallback_used for attempt in review.attempts] == [False, False, True]
+    assert len(client.requests) == 3
+    assert client.requests[2]["url"].endswith(
+        "/models/gemini-flash-lite-latest:generateContent"
+    )
+    assert client.requests[2]["json"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": "minimal"
+    }
+    assert client.requests[2]["json"]["generationConfig"]["maxOutputTokens"] == 4_096
+
+
+@pytest.mark.asyncio
+async def test_all_structured_attempts_invalid_fail_closed_wait_without_more_calls() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="test")
+    quant = candidate()
+    quality = QualityGate(settings).evaluate(quant)
+    client = FakeClient(
+        [
+            gemini_text_payload('{"verdict":"REJECT","score":25.'),
+            gemini_text_payload("not-json"),
+            gemini_text_payload(json.dumps({"verdict": "WAIT"})),
+        ]
+    )
+
     review = await AIAnalystService(settings, client=client).review(quant, quality)
 
     assert review.analysis.verdict == "WAIT"
     assert review.status == "AI_NOT_REVIEWED"
     assert not review.approved
-    assert not review.fallback_used
-    assert len(client.requests) == 1
+    assert review.fallback_used
+    assert review.request_count == 3
+    assert review.error_count == 3
+    assert all(
+        attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts
+    )
+    assert len(client.requests) == 3
 
 
 @pytest.mark.asyncio
@@ -414,11 +546,19 @@ async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> Non
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     apply_quality_result(quant, quality, strategy_version=settings.strategy_version)
-    fallback_payload = gemini_payload()
-    fallback_payload["modelVersion"] = "gemini-flash-lite-latest"
+    fallback_payload = gemini_text_payload(
+        json.dumps(analysis_body()),
+        model="gemini-flash-lite-latest",
+    )
     review = await AIAnalystService(
         settings,
-        client=FakeClient([httpx.ReadTimeout("primary"), fallback_payload]),
+        client=FakeClient(
+            [
+                gemini_text_payload('{"verdict":"REJECT","score":25.'),
+                gemini_text_payload("not-json"),
+                fallback_payload,
+            ]
+        ),
     ).review(quant, quality)
 
     async with factory() as session, session.begin():
@@ -449,11 +589,23 @@ async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> Non
     assert stored.ai_model == "gemini-flash-lite-latest"
     assert stored.ai_fallback_used
     assert "attempts" in json.loads(stored.ai_usage_json)
-    assert [(item.model, item.fallback_used) for item in requests] == [
-        ("gemini-3.6-flash", False),
-        ("gemini-flash-lite-latest", True),
+    assert [(item.model, item.status, item.fallback_used) for item in requests] == [
+        ("gemini-3.6-flash", "ERROR", False),
+        ("gemini-3.6-flash", "ERROR", False),
+        ("gemini-flash-lite-latest", "OK", True),
     ]
-    assert json.loads(requests[1].usage_json)["totalTokenCount"] == 155
+    usage_rows = [json.loads(item.usage_json) for item in requests]
+    assert [item["retry_stage"] for item in usage_rows] == [
+        "PRIMARY",
+        "PRIMARY_STRUCTURED_RETRY",
+        "FALLBACK",
+    ]
+    assert [item["error_code"] for item in usage_rows] == [
+        "INVALID_STRUCTURED_RESPONSE",
+        "INVALID_STRUCTURED_RESPONSE",
+        "",
+    ]
+    assert usage_rows[2]["totalTokenCount"] == 155
     await engine.dispose()
 
 

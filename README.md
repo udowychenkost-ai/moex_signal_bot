@@ -126,6 +126,7 @@ GEMINI_API_KEY=replace_me
 AI_PROVIDER=gemini
 AI_MODEL=gemini-3.6-flash
 AI_FALLBACK_MODEL=gemini-flash-lite-latest
+AI_MAX_OUTPUT_TOKENS=4096
 ```
 
 Команды приложения:
@@ -201,13 +202,22 @@ research-only, а leakage-safe TRAIN/VALIDATION выбрали `5D=5` и `1M=5` 
 Default provider — Gemini `gemini-3.6-flash`. При timeout, rate limit,
 `MODEL_NOT_FOUND`, unsupported model или временной недоступности primary
 выполняется один запрос к
-`gemini-flash-lite-latest`. Если обе модели недоступны, отсутствует
-`GEMINI_API_KEY`, ответ повреждён или не соответствует schema, результат —
+`gemini-flash-lite-latest`. Для `AIAnalysis` используется бюджет 4096 output
+tokens и официально поддерживаемый Gemini 3.6 `thinkingLevel=minimal`.
+Truncated/malformed/schema-invalid JSON получает один compact retry на primary;
+если он также невалиден — ровно один запрос к fallback. Если все попытки
+неуспешны, отсутствует
+`GEMINI_API_KEY` или обе модели недоступны, результат —
 `AI_NOT_REVIEWED / WAIT`: candidate остаётся в research cohort, но
 `TradingIdea` не публикуется. Fallback без успешного AI review по умолчанию
 выключен. `AI score` — рейтинг анализа 0–100, не статистическая вероятность
 успеха. Для альтернативного OpenAI provider задайте `AI_PROVIDER=openai`,
 совместимый `AI_MODEL` и `OPENAI_API_KEY`.
+
+Structured validation errors имеют отдельный код
+`INVALID_STRUCTURED_RESPONSE`. Каждая попытка сохраняется отдельно с этапом
+`PRIMARY`, `PRIMARY_STRUCTURED_RETRY` или `FALLBACK`; raw model text в БД и логи
+не записывается.
 
 При старте Gemini сначала сверяется с `v1beta/models`, затем для каждой модели
 выполняется минимальный structured `generateContent` probe. Наличие в ListModels

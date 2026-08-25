@@ -4,6 +4,18 @@
 
 ### Added
 
+- V2.1.3 hardens Gemini structured responses without changing QualityGate,
+  scoring or lifecycle behavior. `AIAnalysis` requests now use a 4096-token
+  output budget and Gemini 3.6 `thinkingLevel=minimal` for compact classifier
+  output.
+- A successful HTTP response that contains truncated, malformed or schema-invalid
+  JSON is classified as `INVALID_STRUCTURED_RESPONSE`. The service retries the
+  primary once with a stricter compact-output instruction, then calls Flash Lite
+  once; three invalid attempts end fail-closed as `AI_NOT_REVIEWED / WAIT`.
+- Every structured attempt preserves model, latency, HTTP/error status, safe raw
+  usage, fallback flag and `PRIMARY`/`PRIMARY_STRUCTURED_RETRY`/`FALLBACK` stage.
+  Raw model text is neither logged nor persisted, and no migration is required.
+
 - V2.1.2 Gemini provider health hotfix: official `v1beta` ListModels probe,
   startup `OK/DEGRADED/ERROR` validation, compact Telegram request diagnostics,
   manual `python -m app gemini-health` check and a complete last-scan funnel.

@@ -109,7 +109,7 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the V2.1 update, back up PostgreSQL as described below
+Before the V2.1.3 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -125,6 +125,7 @@ GEMINI_API_KEY=replace_with_real_key
 AI_PROVIDER=gemini
 AI_MODEL=gemini-3.6-flash
 AI_FALLBACK_MODEL=gemini-flash-lite-latest
+AI_MAX_OUTPUT_TOKENS=4096
 AI_FILTER_ENABLED=true
 AI_ALLOW_UNREVIEWED_FALLBACK=false
 ```
@@ -135,9 +136,14 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.2/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.3/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
+if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
+  sed -i 's/^AI_MAX_OUTPUT_TOKENS=.*/AI_MAX_OUTPUT_TOKENS=4096/' .env
+else
+  printf '%s\n' 'AI_MAX_OUTPUT_TOKENS=4096' >> .env
+fi
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
 docker compose config --quiet
 docker compose build --pull
@@ -152,6 +158,33 @@ docker compose exec -T postgres sh -c \
 
 The expected Alembic revision is `20260824_0012`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
+
+V2.1.3 does not add a migration. It gives the complete `AIAnalysis` object a
+4096-token ceiling, uses Gemini 3.6 `thinkingLevel=minimal`, and performs at
+most three structured attempts: primary, one primary validation retry, then one
+fallback. Invalid model text is not persisted.
+
+To validate the real on-demand path immediately after deployment, open an
+existing idea in Telegram and run `/idea ID`, then press
+`🧠 Проанализировать сейчас`. Inspect the resulting separate attempts:
+
+```bash
+docker compose exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off' <<'SQL'
+SELECT created_at, model, status, fallback_used, latency_ms,
+       COALESCE((usage_json::jsonb)->>'error_code', '') AS error_code,
+       (usage_json::jsonb)->>'retry_stage' AS retry_stage
+  FROM ai_request_logs
+ WHERE request_kind = 'ON_DEMAND_IDEA'
+ ORDER BY id DESC
+ LIMIT 3;
+SQL
+```
+
+A normal first-pass result has one `PRIMARY / OK` row. Recovery from a truncated
+response has `PRIMARY / ERROR / INVALID_STRUCTURED_RESPONSE`, followed by
+`PRIMARY_STRUCTURED_RETRY / OK`; fallback is present only if that retry also
+fails.
 
 The app performs startup recovery from PostgreSQL: open and pending ideas remain
 in place, later candles continue their lifecycle, and the notification outbox
