@@ -20,6 +20,7 @@ from app.db import create_engine_and_session, init_db
 from app.domain import InstrumentData
 from app.idea_repository import create_or_update_idea
 from app.ideas import idea_material_hash
+from app.liquidity import LiquidityService
 from app.models import IdeaFollow, TradingIdea, WatchlistItem
 from app.repositories import ensure_user, upsert_instruments
 from app.telegram_context import (
@@ -32,6 +33,7 @@ from app.telegram_ui import (
     instrument_analysis_keyboard,
     instrument_context_keyboard,
     lifecycle_context_keyboard,
+    liquidity_context_keyboard,
     market_context_keyboard,
     results_keyboard,
     signal_history_keyboard,
@@ -103,6 +105,7 @@ async def test_context_keyboards_cover_actions_state_navigation_and_callback_lim
             idea_context_keyboard(idea, watched=True, followed=True),
             lifecycle_context_keyboard(idea, closed=False),
             lifecycle_context_keyboard(idea, closed=True),
+            liquidity_context_keyboard(idea.id),
             instrument_context_keyboard("SBER", watched=False, idea_id=idea.id),
             instrument_analysis_keyboard("SBER", watched=True),
             top_ideas_keyboard([idea]),
@@ -124,6 +127,8 @@ async def test_context_keyboards_cover_actions_state_navigation_and_callback_lim
     assert "🏠 Главное меню" in all_labels
     assert "⬅️ Назад" in all_labels or "⬅️ К идеям" in all_labels
     assert "🧠 Gemini vs Quant" in all_labels
+    assert "💧 Ликвидность" in all_labels
+    assert "⬅️ Назад к идее" in all_labels
     for markup in markups:
         assert all(len(value.encode()) <= 64 for value in callback_values(markup))
     await engine.dispose()
@@ -327,5 +332,32 @@ async def test_missing_idea_callback_returns_alert_without_editing_message() -> 
     alerts = [method for method in bot.methods if isinstance(method, AnswerCallbackQuery)]
     assert alerts and alerts[-1].show_alert
     assert not any(isinstance(method, EditMessageReplyMarkup) for method in bot.methods)
+    await bot.session.close()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_liquidity_callback_edits_in_place_and_keeps_idea_navigation() -> None:
+    engine, factory, idea_id = await seeded_context()
+    selected_settings = Settings(_env_file=None)
+    services = BotServices(
+        settings=selected_settings,
+        session_factory=factory,
+        ingestion=NoopIngestion(),
+        signals=NoopSignals(),
+        liquidity=LiquidityService(selected_settings, factory),
+    )
+    dispatcher = Dispatcher()
+    dispatcher.include_router(create_router(services))
+    bot = RecordingBot()
+
+    await dispatcher.feed_update(bot, callback_update(f"idea_liquidity:{idea_id}"))
+
+    edits = [method for method in bot.methods if isinstance(method, EditMessageText)]
+    assert edits
+    assert "Ликвидность" in edits[-1].text
+    assert edits[-1].reply_markup is not None
+    assert callback_values(edits[-1].reply_markup) == [f"idea:{idea_id}", "home"]
+    assert not any(isinstance(method, SendMessage) for method in bot.methods)
     await bot.session.close()
     await engine.dispose()

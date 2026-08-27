@@ -57,6 +57,8 @@ Backtest получает historical candles из того же repository layer
 | `app/horizons.py` | Профили сроков и веса | Отдельную стратегию на горизонт |
 | `app/ideas.py` | Агрегация timeframes/factors, entry zone, вызов общего risk manager | Lifecycle после публикации |
 | `app/quality.py` | Детерминированный PASS/WEAK/REJECT, confirmations/conflicts/regime compatibility | LLM reasoning |
+| `app/liquidity.py` | Read-only DB-first ADV20, fresh direction-aware RUB book depth, spread/volatility modifiers, rating and future AI snapshot | QualityGate, position sizing, lifecycle и HTTP-запрос на каждую карточку |
+| `app/liquidity_ux.py` | Компактный и подробный Telegram UX, консервативное округление и stale/closed-market disclosure | Торговую рекомендацию или «безопасный» размер позиции |
 | `app/ai_analyst.py` | Provider-neutral structured second opinion, bounded invalid-JSON/language validation retry, Russian-only user prose, Gemini fallback orchestration, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
 | `app/ai_providers.py` | Gemini/OpenAI HTTP contracts, exact model/usage/latency/error telemetry | QualityGate, scoring и решение о публикации |
 | `app/provider_health.py` | Gemini LISTED + structured generateContent CALLABLE startup/runtime health, DB telemetry summary, Telegram-safe diagnostics | Остановка ingestion/scheduler и вывод API key |

@@ -4,6 +4,17 @@
 
 ### Added
 
+- V2.1.5 adds a read-only execution-liquidity layer backed by existing
+  `instruments`, completed `1d` candles and fresh `order_book_levels`. Idea cards
+  now show turnover, ADV20, a multi-factor liquidity rating and a conservatively
+  rounded comfortable liquidity size; a dedicated edit-in-place Telegram screen
+  exposes spread and direction-aware ±0.25/0.50/1.00% book depth.
+- Book `QUANTITY` is converted from lots to RUB notional as
+  `price × quantity × lot_size`. Stale/closed-market books are never used in the
+  size formula, and every turnover/book/spread/volatility/rating threshold is
+  configurable. The module is read-only, does not affect QualityGate, scoring,
+  AI, TP/SL, strategy sizing or lifecycle, and requires no migration.
+
 - V2.1.4 requires Russian in every user-facing `AIAnalysis` and market-summary
   text field at the prompt, JSON Schema description and post-validation levels.
   Tickers, numeric values and technical notation such as RSI, EMA20, BUY, SELL,

@@ -109,7 +109,7 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the V2.1.4 update, back up PostgreSQL as described below
+Before the V2.1.5 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -136,7 +136,7 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.4/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.5/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
 if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
@@ -158,6 +158,14 @@ docker compose exec -T postgres sh -c \
 
 The expected Alembic revision is `20260824_0012`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
+
+V2.1.5 adds no migration and does not modify historical ideas. All liquidity
+settings have application defaults. Keep `ENABLE_ORDERBOOK=false` if the
+configured ISS endpoint cannot return L2 data; turnover-only estimates will
+continue to work and will explicitly say that the current book was not used.
+If order-book access is available, set `ENABLE_ORDERBOOK=true` before redeploy.
+After the first successful ingestion, open `/idea ID` and press
+`💧 Ликвидность`; a book older than 300 seconds is intentionally excluded.
 
 V2.1.4 adds no migration and no environment variable. Gemini user-facing prose
 is now validated as Russian; a predominantly English structured response is

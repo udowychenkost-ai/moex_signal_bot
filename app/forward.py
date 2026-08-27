@@ -16,6 +16,8 @@ from app.ai_ux import format_ai_idea_summary, format_historical_ai_analysis
 from app.config import Settings
 from app.domain import IdeaHorizon, IdeaStatus
 from app.idea_repository import OPEN_IDEA_STATUSES
+from app.liquidity import LiquidityAssessment, LiquidityService
+from app.liquidity_ux import format_liquidity_compact
 from app.models import (
     ForwardNotification,
     IdeaFollow,
@@ -85,10 +87,16 @@ def _format_time(value: datetime | None, timezone: str) -> str:
     return aware_utc(value).astimezone(ZoneInfo(timezone)).strftime("%d.%m.%Y %H:%M:%S %Z")
 
 
-def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
+def format_new_idea(
+    idea: TradingIdea,
+    *,
+    timezone: str,
+    liquidity: LiquidityAssessment | None = None,
+) -> str:
     rationale = "\n".join(f"• {escape(line)}" for line in idea.rationale.splitlines()[:3] if line)
     regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
     ai_block = format_ai_idea_summary(idea)
+    liquidity_block = format_liquidity_compact(liquidity)
     return (
         "🔥 <b>СИЛЬНАЯ ИДЕЯ</b>\n🆕 НОВАЯ ИДЕЯ\n\n"
         f"ID: <code>{idea.id}</code>\n"
@@ -111,6 +119,7 @@ def format_new_idea(idea: TradingIdea, *, timezone: str) -> str:
         f"({float(idea.volume_score or 0):+.0f}/100)\n"
         f"📉 Momentum: <b>{float(idea.momentum_extreme_score or 0):+.0f}/100</b>\n"
         f"🏢 Фундаментал: <b>{escape(idea.fundamental_label or 'нет данных')}</b>\n\n"
+        f"{liquidity_block}\n\n"
         f"{ai_block}\n\n"
         f"<b>Quant rationale</b>\n{rationale}\n\n"
         f"Статус: <b>{idea.status}</b> · {_format_time(idea.created_at, timezone)}\n\n"
@@ -257,9 +266,17 @@ def format_open_ideas(ideas: list[TradingIdea]) -> str:
     return "\n".join(lines)
 
 
-def format_idea_history(history: IdeaHistory, *, timezone: str) -> str:
+def format_idea_history(
+    history: IdeaHistory,
+    *,
+    timezone: str,
+    liquidity: LiquidityAssessment | None = None,
+) -> str:
     idea = history.idea
-    lines = [format_new_idea(idea, timezone=timezone), "\n<b>Lifecycle</b>"]
+    lines = [
+        format_new_idea(idea, timezone=timezone, liquidity=liquidity),
+        "\n<b>Lifecycle</b>",
+    ]
     for event in history.events:
         price = f" @ {event.price:.2f}" if event.price is not None else ""
         lines.append(
@@ -388,10 +405,12 @@ class ForwardReportingService:
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
         operations: OperationalService,
+        liquidity: LiquidityService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.operations = operations
+        self.liquidity = liquidity
         self.started_at = datetime.now(UTC)
 
     async def _recipients(self) -> dict[int, TelegramUser | None]:
@@ -465,6 +484,7 @@ class ForwardReportingService:
                 )
             }
         counters = {"recipients": len(recipients), "sent": 0, "errors": 0}
+        liquidity_cache: dict[int, LiquidityAssessment | None] = {}
         for telegram_id, user in recipients.items():
             async with self.session_factory() as session:
                 sent_keys = set(
@@ -545,8 +565,23 @@ class ForwardReportingService:
                     )
                     if not contextual_subscription and strength < user.minimum_confidence:
                         continue
+                assessment = None
+                if event.event_type == "CREATED" and self.liquidity is not None:
+                    if idea.id not in liquidity_cache:
+                        try:
+                            liquidity_cache[idea.id] = await self.liquidity.assess_idea(
+                                idea, now=sent_at
+                            )
+                        except Exception:
+                            logger.exception("Liquidity assessment failed for idea %s", idea.id)
+                            liquidity_cache[idea.id] = None
+                    assessment = liquidity_cache[idea.id]
                 message = (
-                    format_new_idea(idea, timezone=self.settings.scheduler_timezone)
+                    format_new_idea(
+                        idea,
+                        timezone=self.settings.scheduler_timezone,
+                        liquidity=assessment,
+                    )
                     if event.event_type == "CREATED"
                     else format_lifecycle_event(
                         idea,

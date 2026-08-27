@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain import IdeaHorizon
@@ -27,6 +28,43 @@ class Settings(BaseSettings):
     moex_max_retries: int = Field(default=3, ge=1, le=8)
     enable_orderbook: bool = False
 
+    # V2.1.5 execution-liquidity UX. These heuristics never affect strategy sizing.
+    liquidity_adv_days: int = Field(default=20, ge=5, le=100)
+    liquidity_turnover_participation: float = Field(default=0.0025, gt=0, le=0.05)
+    liquidity_book_participation: float = Field(default=0.10, gt=0, le=0.50)
+    liquidity_book_band_narrow: float = Field(default=0.0025, gt=0, le=0.05)
+    liquidity_book_band_primary: float = Field(default=0.005, gt=0, le=0.05)
+    liquidity_book_band_wide: float = Field(default=0.01, gt=0, le=0.10)
+    liquidity_orderbook_freshness_seconds: int = Field(default=300, ge=10, le=3_600)
+    liquidity_turnover_freshness_seconds: int = Field(default=1_800, ge=60, le=86_400)
+    liquidity_spread_tight_threshold: float = Field(default=0.001, ge=0, le=0.05)
+    liquidity_spread_normal_threshold: float = Field(default=0.0025, ge=0, le=0.05)
+    liquidity_spread_wide_threshold: float = Field(default=0.005, ge=0, le=0.10)
+    liquidity_spread_tight_modifier: float = Field(default=1.00, gt=0, le=1)
+    liquidity_spread_normal_modifier: float = Field(default=0.85, gt=0, le=1)
+    liquidity_spread_wide_modifier: float = Field(default=0.60, gt=0, le=1)
+    liquidity_spread_very_wide_modifier: float = Field(default=0.35, gt=0, le=1)
+    liquidity_unknown_spread_modifier: float = Field(default=0.85, gt=0, le=1)
+    liquidity_low_volatility_modifier: float = Field(default=1.00, gt=0, le=1)
+    liquidity_normal_volatility_modifier: float = Field(default=0.90, gt=0, le=1)
+    liquidity_high_volatility_modifier: float = Field(default=0.70, gt=0, le=1)
+    liquidity_extreme_volatility_modifier: float = Field(default=0.45, gt=0, le=1)
+    liquidity_unknown_volatility_modifier: float = Field(default=0.75, gt=0, le=1)
+    liquidity_high_adv_threshold: float = Field(default=1_000_000_000, gt=0)
+    liquidity_medium_adv_threshold: float = Field(default=100_000_000, gt=0)
+    liquidity_high_relative_turnover: float = Field(default=0.75, ge=0)
+    liquidity_medium_relative_turnover: float = Field(default=0.35, ge=0)
+    liquidity_high_depth_threshold: float = Field(default=10_000_000, gt=0)
+    liquidity_medium_depth_threshold: float = Field(default=2_000_000, gt=0)
+    liquidity_rating_adv_weight: float = Field(default=0.30, ge=0, le=1)
+    liquidity_rating_relative_turnover_weight: float = Field(default=0.15, ge=0, le=1)
+    liquidity_rating_spread_weight: float = Field(default=0.20, ge=0, le=1)
+    liquidity_rating_depth_weight: float = Field(default=0.25, ge=0, le=1)
+    liquidity_rating_freshness_weight: float = Field(default=0.10, ge=0, le=1)
+    liquidity_min_known_rating_weight: float = Field(default=0.50, gt=0, le=1)
+    liquidity_high_rating_score: float = Field(default=0.75, ge=0, le=1)
+    liquidity_medium_rating_score: float = Field(default=0.45, ge=0, le=1)
+
     universe_size: int = Field(default=20, ge=1, le=500)
     timeframes: str = "15m,1h,1d"
     default_timeframe: str = "15m"
@@ -40,7 +78,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.5.4"
+    app_version: str = "0.5.5"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -143,6 +181,43 @@ class Settings(BaseSettings):
             raise ValueError("default_timeframe must be one of 5m, 15m, 1h, 4h, 1d, 1w")
         return value
 
+    @model_validator(mode="after")
+    def validate_liquidity_settings(self) -> Settings:
+        if not (
+            self.liquidity_book_band_narrow
+            <= self.liquidity_book_band_primary
+            <= self.liquidity_book_band_wide
+        ):
+            raise ValueError("Liquidity book bands must be ordered narrow <= primary <= wide")
+        if not (
+            self.liquidity_spread_tight_threshold
+            <= self.liquidity_spread_normal_threshold
+            <= self.liquidity_spread_wide_threshold
+        ):
+            raise ValueError("Liquidity spread thresholds must be ordered tight <= normal <= wide")
+        if self.liquidity_medium_adv_threshold > self.liquidity_high_adv_threshold:
+            raise ValueError("Liquidity ADV thresholds must be ordered medium <= high")
+        if self.liquidity_medium_depth_threshold > self.liquidity_high_depth_threshold:
+            raise ValueError("Liquidity depth thresholds must be ordered medium <= high")
+        if self.liquidity_medium_relative_turnover > self.liquidity_high_relative_turnover:
+            raise ValueError(
+                "Liquidity relative-turnover thresholds must be ordered medium <= high"
+            )
+        rating_weight = sum(
+            (
+                self.liquidity_rating_adv_weight,
+                self.liquidity_rating_relative_turnover_weight,
+                self.liquidity_rating_spread_weight,
+                self.liquidity_rating_depth_weight,
+                self.liquidity_rating_freshness_weight,
+            )
+        )
+        if not math.isclose(rating_weight, 1.0):
+            raise ValueError("Liquidity rating weights must sum to 1")
+        if self.liquidity_medium_rating_score > self.liquidity_high_rating_score:
+            raise ValueError("Liquidity rating scores must be ordered medium <= high")
+        return self
+
     @property
     def timeframe_list(self) -> list[str]:
         allowed = {"5m", "15m", "1h", "4h", "1d", "1w"}
@@ -156,6 +231,18 @@ class Settings(BaseSettings):
     def analysis_timeframe_list(self) -> list[str]:
         required = ["5m", "15m", "1h", "4h", "1d", "1w"]
         return list(dict.fromkeys([*required, *self.timeframe_list]))
+
+    @property
+    def liquidity_book_bands(self) -> tuple[float, ...]:
+        return tuple(
+            sorted(
+                {
+                    self.liquidity_book_band_narrow,
+                    self.liquidity_book_band_primary,
+                    self.liquidity_book_band_wide,
+                }
+            )
+        )
 
     @property
     def blue_chip_list(self) -> list[str]:

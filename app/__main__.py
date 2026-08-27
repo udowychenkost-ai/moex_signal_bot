@@ -28,6 +28,7 @@ from app.horizons import get_horizon_profile
 from app.idea_tracker import IdeaTracker
 from app.ideas import TradingIdeaGenerator
 from app.ingestion import IngestionService
+from app.liquidity import LiquidityService
 from app.logging_config import configure_logging
 from app.market_context import MarketRegimeService
 from app.market_overview import MarketOverviewService
@@ -163,10 +164,12 @@ async def run_bot() -> None:
                 experiment_tracker=experiment_tracker,
             )
             operations = OperationalService(settings, session_factory, freshness)
+            liquidity = LiquidityService(settings, session_factory)
             forward_reporting = ForwardReportingService(
                 settings,
                 session_factory,
                 operations,
+                liquidity,
             )
             services = BotServices(
                 settings,
@@ -190,6 +193,7 @@ async def run_bot() -> None:
                     quality_gate,
                 ),
                 gemini_health,
+                liquidity,
             )
             recovery_tracking = await tracker.track_all()
             recovery_tracking.update(await experiment_tracker.track_all())

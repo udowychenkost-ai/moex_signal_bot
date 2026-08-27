@@ -46,6 +46,8 @@ from app.forward import (
     format_technical_analysis,
 )
 from app.ingestion import IngestionService
+from app.liquidity import LiquidityAssessment, LiquidityService
+from app.liquidity_ux import format_liquidity_details
 from app.market_overview import MarketOverviewService, format_market_overview
 from app.models import CandidateExperiment, SignalRecord, TelegramUser, TradingIdea
 from app.on_demand_ai import OnDemandAIService
@@ -76,6 +78,7 @@ from app.telegram_ui import (
     ideas_page_keyboard,
     instrument_analysis_keyboard,
     instrument_context_keyboard,
+    liquidity_context_keyboard,
     market_context_keyboard,
     results_keyboard,
     signal_history_keyboard,
@@ -101,6 +104,7 @@ class BotServices:
     market_overview: MarketOverviewService | None = None
     on_demand_ai: OnDemandAIService | None = None
     gemini_health: GeminiHealthMonitor | None = None
+    liquidity: LiquidityService | None = None
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -535,6 +539,15 @@ def create_router(services: BotServices) -> Router:
     router = Router(name="moex-signal-bot")
     context_service = TelegramContextService(services.session_factory)
 
+    async def idea_liquidity(idea: TradingIdea) -> LiquidityAssessment | None:
+        if services.liquidity is None:
+            return None
+        try:
+            return await services.liquidity.assess_idea(idea)
+        except Exception:
+            logger.exception("Liquidity assessment failed for idea %s", idea.id)
+            return None
+
     @router.message(Command("start"))
     async def start(message: Message) -> None:
         await _ensure_message_user(message, services)
@@ -668,9 +681,14 @@ def create_router(services: BotServices) -> Router:
             await message.answer("Идея не найдена.")
             return
         context = await context_service.idea_context(user.telegram_id, history.idea.id)
+        liquidity = await idea_liquidity(history.idea)
         await _answer_long(
             message,
-            format_idea_history(history, timezone=services.settings.scheduler_timezone),
+            format_idea_history(
+                history,
+                timezone=services.settings.scheduler_timezone,
+                liquidity=liquidity,
+            ),
             reply_markup=idea_context_keyboard(
                 history.idea,
                 watched=context.watched,
@@ -937,9 +955,14 @@ def create_router(services: BotServices) -> Router:
             if history is None:
                 await callback.answer("Идея не найдена", show_alert=True)
                 return
+            liquidity = await idea_liquidity(history.idea)
             await _edit_context(
                 callback,
-                format_new_idea(history.idea, timezone=services.settings.scheduler_timezone),
+                format_new_idea(
+                    history.idea,
+                    timezone=services.settings.scheduler_timezone,
+                    liquidity=liquidity,
+                ),
                 reply_markup=idea_context_keyboard(
                     history.idea,
                     watched=context.watched,
@@ -956,6 +979,34 @@ def create_router(services: BotServices) -> Router:
                     followed=context.followed,
                 ),
             )
+        await callback.answer()
+
+    @router.callback_query(F.data.regexp(r"^idea_liquidity:[0-9]+$"))
+    async def idea_liquidity_details(callback: CallbackQuery) -> None:
+        user = await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None:
+            await callback.answer()
+            return
+        idea_id = int(callback.data.partition(":")[2])
+        try:
+            context = await context_service.idea_context(user.telegram_id, idea_id)
+        except (ContextAccessError, ContextObjectNotFound) as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        if services.liquidity is None:
+            await callback.answer("Оценка ликвидности недоступна", show_alert=True)
+            return
+        try:
+            assessment = await services.liquidity.assess_idea(context.idea)
+        except Exception:
+            logger.exception("Liquidity details failed for idea %s", idea_id)
+            await callback.answer("Данные ликвидности временно недоступны", show_alert=True)
+            return
+        await _edit_context(
+            callback,
+            format_liquidity_details(assessment),
+            liquidity_context_keyboard(idea_id),
+        )
         await callback.answer()
 
     @router.callback_query(
@@ -1216,9 +1267,14 @@ def create_router(services: BotServices) -> Router:
         if history is None:
             await callback.answer("Идея больше не существует", show_alert=True)
             return
+        liquidity = (
+            await idea_liquidity(history.idea) if action == "instrument_idea" else None
+        )
         formatters = {
             "instrument_idea": lambda: format_new_idea(
-                history.idea, timezone=services.settings.scheduler_timezone
+                history.idea,
+                timezone=services.settings.scheduler_timezone,
+                liquidity=liquidity,
             ),
             "instrument_noidea": lambda: "",
             "instrument_ai": lambda: format_ai_analysis(history),
