@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import math
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -347,16 +348,32 @@ async def get_market_candles_range(
     return list(result)
 
 
-async def save_orderbook_snapshot(
-    session: AsyncSession, levels: list[OrderBookLevelData], retention_hours: int = 24
-) -> int:
+async def save_orderbook_snapshot(session: AsyncSession, levels: list[OrderBookLevelData]) -> int:
+    """Validate and atomically replace the latest snapshot for one instrument.
+
+    The caller owns the transaction. Validation happens before DELETE, so an
+    empty or malformed response can never erase the last known-good snapshot.
+    """
     if not levels:
         return 0
-    await session.execute(
-        delete(OrderBookLevel).where(
-            OrderBookLevel.snapshot_at < datetime.now(UTC) - timedelta(hours=retention_hours)
-        )
-    )
+    secids = {item.secid.upper() for item in levels}
+    boards = {item.board_id.upper() for item in levels}
+    snapshots = {item.snapshot_at for item in levels}
+    keys = {(item.side, item.level) for item in levels}
+    sides = {item.side for item in levels}
+    if len(secids) != 1 or len(boards) != 1 or len(snapshots) != 1:
+        raise ValueError("Order-book snapshot must contain one instrument, board and timestamp")
+    if sides != {"B", "S"}:
+        raise ValueError("Order-book snapshot must contain both bid and ask sides")
+    if len(keys) != len(levels):
+        raise ValueError("Order-book snapshot contains duplicate side/level keys")
+    for item in levels:
+        if item.level < 1 or not math.isfinite(item.price) or item.price <= 0:
+            raise ValueError("Order-book level has an invalid level or price")
+        if item.quantity is not None and (not math.isfinite(item.quantity) or item.quantity <= 0):
+            raise ValueError("Order-book quantity must be positive lots or null")
+    secid = next(iter(secids))
+    await session.execute(delete(OrderBookLevel).where(OrderBookLevel.secid == secid))
     session.add_all(
         [
             OrderBookLevel(

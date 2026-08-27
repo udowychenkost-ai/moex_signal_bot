@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import Settings
 from app.operations import OperationalService
+from app.orderbook_ingestion import OrderBookIngestionService
 from app.scanner import MarketScanner
 
 logger = logging.getLogger(__name__)
@@ -23,12 +24,14 @@ class ScheduledJobs:
         reporting: Any,
         bot: Bot,
         operations: OperationalService | None = None,
+        orderbooks: OrderBookIngestionService | None = None,
     ) -> None:
         self.settings = settings
         self.scanner = scanner
         self.reporting = reporting
         self.bot = bot
         self.operations = operations
+        self.orderbooks = orderbooks
 
     async def _run(
         self,
@@ -69,6 +72,11 @@ class ScheduledJobs:
 
     async def ingest_market(self) -> dict[str, Any]:
         return await self._run("market_ingestion", self.scanner.ingest)
+
+    async def ingest_orderbooks(self) -> dict[str, Any]:
+        if self.orderbooks is None:
+            return {"enabled": False, "status": "DISABLED", "errors": 0}
+        return await self._run("order_book_ingestion", self.orderbooks.sync_all)
 
     async def scan_market(self) -> dict[str, Any]:
         result = await self._run("idea_scanning", self.scanner.scan_ideas)
@@ -128,6 +136,18 @@ def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler
         next_run_time=now,
         **common,
     )
+    if settings.enable_orderbook:
+        scheduler.add_job(
+            jobs.ingest_orderbooks,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour="7-23",
+            minute=f"*/{settings.orderbook_interval_minutes}",
+            second=10,
+            id="order_book_ingestion",
+            next_run_time=now + timedelta(seconds=5),
+            **common,
+        )
     scheduler.add_job(
         jobs.track_lifecycle,
         trigger="cron",

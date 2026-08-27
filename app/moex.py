@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -382,9 +383,20 @@ class MoexClient:
         snapshot_at = datetime.now(UTC)
         result: list[OrderBookLevelData] = []
         for side in ("B", "S"):
-            side_rows = [row for row in rows if row.get("BUYSELL") == side and row.get("PRICE")]
-            side_rows.sort(key=lambda row: float(row["PRICE"]), reverse=side == "B")
-            for level, row in enumerate(side_rows[:depth], start=1):
+            side_rows: list[tuple[float, float, dict[str, Any]]] = []
+            for row in rows:
+                if row.get("BUYSELL") != side:
+                    continue
+                try:
+                    price = float(row["PRICE"])
+                    quantity = float(row["QUANTITY"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if not all(math.isfinite(value) and value > 0 for value in (price, quantity)):
+                    continue
+                side_rows.append((price, quantity, row))
+            side_rows.sort(key=lambda item: item[0], reverse=side == "B")
+            for level, (price, quantity, _) in enumerate(side_rows[:depth], start=1):
                 result.append(
                     OrderBookLevelData(
                         secid=secid.upper(),
@@ -392,8 +404,78 @@ class MoexClient:
                         snapshot_at=snapshot_at,
                         side=side,
                         level=level,
-                        price=float(row["PRICE"]),
-                        quantity=float(row.get("QUANTITY") or 0),
+                        price=price,
+                        quantity=quantity,
                     )
                 )
+        return result
+
+    async def fetch_top_of_book_batch(
+        self,
+        secids: list[str],
+        *,
+        board_id: str = "TQBR",
+    ) -> dict[str, list[OrderBookLevelData]]:
+        """Fetch official ISS level-1 quotes for a bounded monitored universe.
+
+        Public ISS exposes delayed BID/OFFER but normally redacts BIDDEPTH and
+        OFFERDEPTH. Missing quantities remain None so downstream code can use
+        the real spread without inventing depth. When supplied, MOEX documents
+        both depth fields as lots.
+        """
+        requested = {secid.upper() for secid in secids if secid.strip()}
+        if not requested:
+            return {}
+        path = f"/engines/stock/markets/shares/boards/{board_id}/securities.json"
+        payload = await self._get(
+            path,
+            {
+                "iss.only": "marketdata",
+                "marketdata.columns": (
+                    "BOARDID,SECID,BID,BIDDEPTH,OFFER,OFFERDEPTH,UPDATETIME,SYSTIME"
+                ),
+                "securities": ",".join(sorted(requested)),
+                "iss.meta": "off",
+            },
+        )
+        rows = _rows(payload, "marketdata")
+        snapshot_at = datetime.now(UTC)
+        result: dict[str, list[OrderBookLevelData]] = {}
+        for row in rows:
+            secid = str(row.get("SECID") or "").upper()
+            if secid not in requested:
+                continue
+            levels: list[OrderBookLevelData] = []
+            for side, price_field, depth_field in (
+                ("B", "BID", "BIDDEPTH"),
+                ("S", "OFFER", "OFFERDEPTH"),
+            ):
+                try:
+                    price = float(row[price_field])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if not math.isfinite(price) or price <= 0:
+                    continue
+                quantity: float | None = None
+                raw_quantity = row.get(depth_field)
+                if raw_quantity not in (None, ""):
+                    try:
+                        parsed_quantity = float(raw_quantity)
+                    except (TypeError, ValueError):
+                        parsed_quantity = 0
+                    if math.isfinite(parsed_quantity) and parsed_quantity > 0:
+                        quantity = parsed_quantity
+                levels.append(
+                    OrderBookLevelData(
+                        secid=secid,
+                        board_id=str(row.get("BOARDID") or board_id).upper(),
+                        snapshot_at=snapshot_at,
+                        side=side,
+                        level=1,
+                        price=price,
+                        quantity=quantity,
+                    )
+                )
+            if levels:
+                result[secid] = levels
         return result

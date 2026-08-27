@@ -210,7 +210,9 @@ class OrderBookLevelData:
     side: str
     level: int
     price: float
-    quantity: float
+    # MOEX ORDERBOOK/BIDDEPTH/OFFERDEPTH quantities are lots. Public ISS may
+    # expose best prices without depth; None means unavailable, never zero depth.
+    quantity: float | None
 
 
 @dataclass(slots=True)

@@ -4,6 +4,15 @@
 
 ### Added
 
+- V2.1.5.1 implements real MOEX order-book ingestion in the existing runtime:
+  an independent two-minute scheduler job, bounded subscribed-depth requests,
+  a filtered public ISS level-1 batch fallback, transactional latest-snapshot
+  replacement, per-ticker failure isolation, summary logging, `/status` health
+  and `python -m app ingest-orderbook` diagnostics.
+- Public ISS best bid/offer is preserved without inventing unavailable depth;
+  `BIDDEPTH/OFFERDEPTH` is nullable via Alembic `20260827_0013`. Actual MOEX
+  depth stays in lots and the existing liquidity formula remains unchanged.
+
 - V2.1.5 adds a read-only execution-liquidity layer backed by existing
   `instruments`, completed `1d` candles and fresh `order_book_levels`. Idea cards
   now show turnover, ADV20, a multi-factor liquidity rating and a conservatively

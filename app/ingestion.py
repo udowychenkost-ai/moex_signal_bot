@@ -15,7 +15,6 @@ from app.repositories import (
     latest_candle_begin,
     latest_market_candle_begin,
     list_active_instruments,
-    save_orderbook_snapshot,
     upsert_candles,
     upsert_instruments,
     upsert_market_candles,
@@ -96,9 +95,7 @@ class IngestionService:
         logger.info("Universe synced: %s instruments", len(selected))
         return [item.secid for item in selected]
 
-    async def sync_all(self, *, include_orderbook: bool | None = None) -> dict[str, int]:
-        if include_orderbook is None:
-            include_orderbook = self.settings.enable_orderbook
+    async def sync_all(self) -> dict[str, int]:
         async with self.session_factory() as session:
             instruments = await list_active_instruments(session)
         if not instruments:
@@ -114,17 +111,6 @@ class IngestionService:
                 async with self._semaphore:
                     for timeframe in self.settings.analysis_timeframe_list:
                         candle_count += await self.sync_candles(secid, timeframe, board_id=board_id)
-                    if include_orderbook:
-                        try:
-                            levels = await self.moex.fetch_orderbook(secid, board_id=board_id)
-                            async with self._write_lock:
-                                async with self.session_factory() as session, session.begin():
-                                    orderbook_count += await save_orderbook_snapshot(
-                                        session, levels
-                                    )
-                        except Exception:
-                            error_count += 1
-                            logger.exception("Order book unavailable for %s", secid)
             except Exception:
                 error_count += 1
                 logger.exception("Failed to ingest %s", secid)

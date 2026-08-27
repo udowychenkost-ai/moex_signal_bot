@@ -37,6 +37,9 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         ai_request_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(ai_request_logs)")
         }
+        orderbook_columns = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(order_book_levels)")
+        }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
     assert {
@@ -81,7 +84,45 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
     assert {"ai_filter_enabled", "notify_sl", "notify_daily_summary"}.issubset(user_columns)
     assert "notify_watchlist" in user_columns
     assert {"strategy_version", "quality_gate_result", "ai_verdict"}.issubset(idea_columns)
-    assert revision == ("20260824_0012",)
+    assert orderbook_columns["quantity"][3] == 0
+    assert revision == ("20260827_0013",)
+
+
+def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-orderbook.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    config = migration_config(database_url)
+    command.upgrade(config, "20260824_0012")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO instruments (
+                secid, board_id, instrument_type, short_name, lot_size,
+                echelon, is_active, updated_at
+            ) VALUES ('SBER', 'TQBR', 'stock', 'Сбербанк', 10, 1, 1,
+                      '2026-08-27 10:00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_book_levels (
+                secid, board_id, snapshot_at, side, level, price, quantity
+            ) VALUES ('SBER', 'TQBR', '2026-08-27 10:00:00', 'B', 1, 268.20, 125)
+            """
+        )
+        connection.commit()
+
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT secid, side, price, quantity FROM order_book_levels"
+        ).fetchone()
+        columns = {
+            item[1]: item for item in connection.execute("PRAGMA table_info(order_book_levels)")
+        }
+    assert row == ("SBER", "B", 268.2, 125.0)
+    assert columns["quantity"][3] == 0
 
 
 def test_v2_upgrade_preserves_existing_trading_idea_as_v1(tmp_path: Path) -> None:
@@ -173,7 +214,7 @@ async def test_gemini_telemetry_upgrade_preserves_existing_v2_log(tmp_path: Path
         ).fetchone()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert row == ("openai", "gpt-5-mini", 10, 0, "{}")
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) -> None:
@@ -209,7 +250,7 @@ async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) 
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert user == (101, "existing", 1)
     assert "idea_follows" in tables
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -229,7 +270,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -240,7 +281,7 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
@@ -256,7 +297,7 @@ async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -> None:
@@ -275,7 +316,7 @@ async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(tables)
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)
 
 
 async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -> None:
@@ -294,4 +335,4 @@ async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"market_candles", "fundamental_reports"}.issubset(tables)
-    assert revision == ("20260824_0012",)
+    assert revision == ("20260827_0013",)

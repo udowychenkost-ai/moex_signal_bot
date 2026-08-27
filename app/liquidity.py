@@ -30,7 +30,7 @@ class LiquidityRating(StrEnum):
 class BookLevelInput:
     side: str
     price: float
-    quantity_lots: float
+    quantity_lots: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,25 +194,25 @@ def calculate_book_depths(
     result: list[LiquidityDepth] = []
     for band in bands:
         bid_depth = sum(
-            level.price * level.quantity_lots * lot
+            level.price * (level.quantity_lots or 0) * lot
             for level in levels
             if level.side == "B"
             and level.price >= best_bid * (1 - band)
             and level.price <= best_bid
+            and level.quantity_lots is not None
             and level.quantity_lots > 0
         )
         ask_depth = sum(
-            level.price * level.quantity_lots * lot
+            level.price * (level.quantity_lots or 0) * lot
             for level in levels
             if level.side == "S"
             and level.price <= best_ask * (1 + band)
             and level.price >= best_ask
+            and level.quantity_lots is not None
             and level.quantity_lots > 0
         )
         entry_depth, exit_depth = (
-            (ask_depth, bid_depth)
-            if normalized_direction == "BUY"
-            else (bid_depth, ask_depth)
+            (ask_depth, bid_depth) if normalized_direction == "BUY" else (bid_depth, ask_depth)
         )
         result.append(
             LiquidityDepth(
@@ -382,11 +382,7 @@ def calculate_liquidity(
         else ()
     )
     primary = next(
-        (
-            item
-            for item in depths
-            if math.isclose(item.band, settings.liquidity_book_band_primary)
-        ),
+        (item for item in depths if math.isclose(item.band, settings.liquidity_book_band_primary)),
         None,
     )
     adv20 = _positive(inputs.adv20)
@@ -563,9 +559,9 @@ class LiquidityService:
         turnover_today = database_turnover if turnover_fresh else None
         if not is_open and database_turnover is not None and updated_at is not None:
             local_checked = checked_at.astimezone(ZoneInfo(self.settings.scheduler_timezone)).date()
-            local_updated = aware_utc(updated_at).astimezone(
-                ZoneInfo(self.settings.scheduler_timezone)
-            ).date()
+            local_updated = (
+                aware_utc(updated_at).astimezone(ZoneInfo(self.settings.scheduler_timezone)).date()
+            )
             if local_checked == local_updated:
                 last_daily_turnover = database_turnover
         assessment = calculate_liquidity(

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260824_0012"
+HEAD_REVISION = "20260827_0013"
 BASELINE_TABLES = {
     "instruments",
     "candles",
@@ -163,7 +163,7 @@ def _legacy_revision(snapshot: SchemaSnapshot) -> str | None:
             "usage_json",
         }.issubset(snapshot.ai_request_columns):
             if "idea_follows" in snapshot.tables and "notify_watchlist" in snapshot.user_columns:
-                return HEAD_REVISION
+                return "20260824_0012"
             return "20260824_0011"
         return "20260824_0010"
     if (

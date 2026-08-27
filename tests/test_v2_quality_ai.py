@@ -270,7 +270,7 @@ def test_gemini_is_the_default_provider() -> None:
     assert settings.ai_model == "gemini-3.6-flash"
     assert settings.ai_fallback_model == "gemini-flash-lite-latest"
     assert settings.ai_max_output_tokens == 4_096
-    assert settings.app_version == "0.5.5"
+    assert settings.app_version == "0.5.6"
 
 
 @pytest.mark.asyncio
@@ -423,9 +423,10 @@ async def test_truncated_ai_analysis_retries_primary_once_with_compact_prompt() 
     assert review.attempts[0].usage is not None
     assert review.attempts[0].usage["finishReason"] == "MAX_TOKENS"
     assert '{"verdict":"REJECT"' not in review.attempts[0].error
-    assert "previous response was incomplete" in str(
-        client.requests[1]["json"]["systemInstruction"]["parts"][0]["text"]
-    ).lower()
+    assert (
+        "previous response was incomplete"
+        in str(client.requests[1]["json"]["systemInstruction"]["parts"][0]["text"]).lower()
+    )
     schema = client.requests[0]["json"]["generationConfig"]["responseJsonSchema"]
     assert set(schema["required"]) == set(AIAnalysis.model_json_schema()["required"])
 
@@ -499,9 +500,7 @@ async def test_primary_invalid_retry_invalid_then_fallback_succeeds_once() -> No
     ]
     assert [attempt.fallback_used for attempt in review.attempts] == [False, False, True]
     assert len(client.requests) == 3
-    assert client.requests[2]["url"].endswith(
-        "/models/gemini-flash-lite-latest:generateContent"
-    )
+    assert client.requests[2]["url"].endswith("/models/gemini-flash-lite-latest:generateContent")
     assert client.requests[2]["json"]["generationConfig"]["thinkingConfig"] == {
         "thinkingLevel": "minimal"
     }
@@ -529,9 +528,7 @@ async def test_all_structured_attempts_invalid_fail_closed_wait_without_more_cal
     assert review.fallback_used
     assert review.request_count == 3
     assert review.error_count == 3
-    assert all(
-        attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts
-    )
+    assert all(attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts)
     assert len(client.requests) == 3
 
 

@@ -78,7 +78,7 @@ class OrderBookLevel(Base):
     side: Mapped[str] = mapped_column(String(1))
     level: Mapped[int] = mapped_column(Integer)
     price: Mapped[float] = mapped_column(Float)
-    quantity: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class TelegramUser(Base):

@@ -65,7 +65,8 @@ the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
 
-Revisions `20260824_0010`, `20260824_0011` and `20260824_0012` only add
+Revisions `20260824_0010`, `20260824_0011`, `20260824_0012` and
+`20260827_0013` only add
 columns/tables and
 preserve every existing V1/V2 `TradingIdea` and experiment row. Existing V1
 rows remain labeled `strategy_version=v1`; V2 forward statistics use
@@ -73,6 +74,9 @@ rows remain labeled `strategy_version=v1`; V2 forward statistics use
 provider fallback/raw usage telemetry. Revision `0012` adds the per-user
 `idea_follows` relation and `notify_watchlist=true` preference; it neither
 clears nor rewrites existing users, ideas, experiments or notification outbox.
+Revision `0013` only makes `order_book_levels.quantity` nullable: public ISS
+publishes delayed best bid/offer but can omit depth, which must not be replaced
+with a fabricated zero quantity.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -109,7 +113,7 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the V2.1.5 update, back up PostgreSQL as described below
+Before the V2.1.5.1 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -136,13 +140,28 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.5/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.6/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
 if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
   sed -i 's/^AI_MAX_OUTPUT_TOKENS=.*/AI_MAX_OUTPUT_TOKENS=4096/' .env
 else
   printf '%s\n' 'AI_MAX_OUTPUT_TOKENS=4096' >> .env
+fi
+if grep -q '^ENABLE_ORDERBOOK=' .env; then
+  sed -i 's/^ENABLE_ORDERBOOK=.*/ENABLE_ORDERBOOK=true/' .env
+else
+  printf '%s\n' 'ENABLE_ORDERBOOK=true' >> .env
+fi
+if grep -q '^ORDERBOOK_INTERVAL_MINUTES=' .env; then
+  sed -i 's/^ORDERBOOK_INTERVAL_MINUTES=.*/ORDERBOOK_INTERVAL_MINUTES=2/' .env
+else
+  printf '%s\n' 'ORDERBOOK_INTERVAL_MINUTES=2' >> .env
+fi
+if grep -q '^ORDERBOOK_REQUEST_CONCURRENCY=' .env; then
+  sed -i 's/^ORDERBOOK_REQUEST_CONCURRENCY=.*/ORDERBOOK_REQUEST_CONCURRENCY=5/' .env
+else
+  printf '%s\n' 'ORDERBOOK_REQUEST_CONCURRENCY=5' >> .env
 fi
 export GIT_COMMIT="$(git rev-parse --short HEAD)"
 docker compose config --quiet
@@ -156,16 +175,38 @@ docker compose exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 ```
 
-The expected Alembic revision is `20260824_0012`. Do not run `docker compose
+The expected Alembic revision is `20260827_0013`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
 
-V2.1.5 adds no migration and does not modify historical ideas. All liquidity
-settings have application defaults. Keep `ENABLE_ORDERBOOK=false` if the
-configured ISS endpoint cannot return L2 data; turnover-only estimates will
-continue to work and will explicitly say that the current book was not used.
-If order-book access is available, set `ENABLE_ORDERBOOK=true` before redeploy.
-After the first successful ingestion, open `/idea ID` and press
-`💧 Ликвидность`; a book older than 300 seconds is intentionally excluded.
+V2.1.5.1 adds the independent `order_book_ingestion` job. Public ISS provides a
+delayed official best bid/offer feed but not guaranteed depth; the bot stores
+missing depth as `NULL`, uses the real spread, and does not claim a depth-based
+size. Set `ENABLE_ORDERBOOK=true`, `ORDERBOOK_INTERVAL_MINUTES=2` and
+`ORDERBOOK_REQUEST_CONCURRENCY=5`. A paid ISS token is optional and is only
+needed for subscribed full depth. After redeploy, run the manual verification
+below; a snapshot older than 300 seconds is intentionally excluded.
+
+```bash
+docker compose exec app python -m app ingest-orderbook
+docker compose exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off' <<'SQL'
+SELECT COUNT(*), MAX(snapshot_at) FROM order_book_levels;
+SELECT secid, COUNT(*) AS levels, MAX(snapshot_at)
+  FROM order_book_levels
+ GROUP BY secid
+ ORDER BY secid;
+SELECT secid, side, level, price, quantity, snapshot_at
+  FROM order_book_levels
+ WHERE secid='SBER'
+ ORDER BY snapshot_at DESC, side, level
+ LIMIT 20;
+SQL
+```
+
+Both `B` and `S` rows must have positive prices. `quantity > 0` means real MOEX
+lots; `NULL` means public ISS did not publish depth and is expected—not a failed
+or fabricated snapshot. `/status` reports enabled state, last update, fresh
+instruments and the last job as `OK`, `PARTIAL` or `ERROR`.
 
 V2.1.4 adds no migration and no environment variable. Gemini user-facing prose
 is now validated as Russian; a predominantly English structured response is

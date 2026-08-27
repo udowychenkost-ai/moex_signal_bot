@@ -37,11 +37,12 @@ from app.moex import MoexClient
 from app.observation import DataFreshnessGuard
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService
+from app.orderbook_ingestion import OrderBookIngestionService
 from app.paper import PaperTradingService
 from app.provider_health import GeminiHealthMonitor
 from app.quality import QualityGate
 from app.reporting import ReportingService
-from app.repositories import get_active_instrument, get_candles
+from app.repositories import get_active_instrument, get_candles, list_active_instruments
 from app.scanner import MarketScanner
 from app.scheduler import ScheduledJobs, build_scheduler
 from app.signals import SignalService
@@ -72,6 +73,10 @@ async def ingest_once() -> None:
             )
             await ingestion.sync_universe()
             result = await ingestion.sync_all()
+            if settings.enable_orderbook:
+                result["orderbook"] = await OrderBookIngestionService(
+                    settings, session_factory, moex
+                ).sync_all()
             result["fundamental_reports"] = await fundamental_ingestion.sync()
             logger.info("One-off ingestion result: %s", result)
     finally:
@@ -99,6 +104,7 @@ async def run_bot() -> None:
             api_token=settings.moex_api_token,
         ) as moex:
             ingestion = IngestionService(settings, session_factory, moex)
+            orderbooks = OrderBookIngestionService(settings, session_factory, moex)
             market_context = MarketRegimeService(
                 session_factory,
                 benchmark=settings.market_benchmark,
@@ -203,7 +209,14 @@ async def run_bot() -> None:
                 recovery_tracking,
                 recovery_paper,
             )
-            jobs = ScheduledJobs(settings, scanner, forward_reporting, bot, operations)
+            jobs = ScheduledJobs(
+                settings,
+                scanner,
+                forward_reporting,
+                bot,
+                operations,
+                orderbooks=orderbooks,
+            )
             scheduler = build_scheduler(settings, jobs)
             operations.attach_scheduler(scheduler)
             scheduler.start()
@@ -259,6 +272,30 @@ async def migrate_once() -> None:
     logger.info("Database schema is at Alembic head")
 
 
+async def ingest_orderbook_once() -> int:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    await migrate_database(settings.database_url)
+    engine, session_factory = create_engine_and_session(settings.database_url)
+    try:
+        async with MoexClient(
+            settings.moex_base_url,
+            timeout_seconds=settings.moex_request_timeout_seconds,
+            max_retries=settings.moex_max_retries,
+            api_token=settings.moex_api_token,
+        ) as moex:
+            if settings.enable_orderbook:
+                async with session_factory() as session:
+                    active = await list_active_instruments(session)
+                if not active:
+                    await IngestionService(settings, session_factory, moex).sync_universe()
+            result = await OrderBookIngestionService(settings, session_factory, moex).sync_all()
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            return int(result.get("status") == "ERROR")
+    finally:
+        await engine.dispose()
+
+
 async def healthcheck_once() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -285,7 +322,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX signal bot")
     parser.add_argument(
         "command",
-        choices=("run", "ingest", "backtest", "migrate", "healthcheck", "gemini-health"),
+        choices=(
+            "run",
+            "ingest",
+            "ingest-orderbook",
+            "backtest",
+            "migrate",
+            "healthcheck",
+            "gemini-health",
+        ),
         nargs="?",
         default="run",
     )
@@ -301,6 +346,8 @@ def main() -> None:
         asyncio.run(run_bot())
     elif args.command == "ingest":
         asyncio.run(ingest_once())
+    elif args.command == "ingest-orderbook":
+        raise SystemExit(asyncio.run(ingest_orderbook_once()))
     elif args.command == "backtest":
         if not args.ticker:
             parser.error("backtest requires TICKER")

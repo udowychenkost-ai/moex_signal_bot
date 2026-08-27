@@ -351,14 +351,29 @@ R-multiple. В проекте нет broker execution adapter: paper-конту�
 
 ## MOEX ISS и order book
 
-Публичный `iss.moex.com` предоставляет свечи без токена. L2 может требовать ISS+
-и возвращать `denied`, поэтому стакан выключен по умолчанию и его сбой не мешает
-OHLCV ingestion.
+Публичный `iss.moex.com` предоставляет свечи и задержанные best bid/offer без
+токена. Полный L2 `/orderbook` является подписочным продуктом; в публичном
+`marketdata` поля `BIDDEPTH/OFFERDEPTH` обычно отсутствуют. Бот не симулирует
+глубину: сохраняет реальный level-1 spread, а неизвестное количество — как
+`NULL`. Если подписочный endpoint возвращает глубину, `QUANTITY` хранится в
+лотах и переводится в рубли только как `price × quantity × lot_size`.
+
+Сбор использует один отфильтрованный batch только по active monitored universe,
+работает отдельным scheduler job каждые две минуты и транзакционно заменяет
+предыдущий snapshot только после получения и проверки нового. Ошибка одного
+инструмента не останавливает свечи, scanning, lifecycle или Telegram.
 
 ```env
-MOEX_BASE_URL=https://apim.moex.com/iss
-MOEX_API_TOKEN=your_iss_plus_token
+MOEX_BASE_URL=https://iss.moex.com/iss
 ENABLE_ORDERBOOK=true
+ORDERBOOK_INTERVAL_MINUTES=2
+ORDERBOOK_REQUEST_CONCURRENCY=5
+```
+
+Ручная диагностика без запуска scheduler:
+
+```bash
+python -m app ingest-orderbook
 ```
 
 ## Docker

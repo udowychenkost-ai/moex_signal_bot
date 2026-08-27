@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     moex_request_timeout_seconds: float = 20.0
     moex_request_concurrency: int = Field(default=5, ge=1, le=20)
     moex_max_retries: int = Field(default=3, ge=1, le=8)
+    # Environment: ENABLE_ORDERBOOK, ORDERBOOK_INTERVAL_MINUTES,
+    # ORDERBOOK_REQUEST_CONCURRENCY.
     enable_orderbook: bool = False
+    orderbook_interval_minutes: int = Field(default=2, ge=1, le=5)
+    orderbook_request_concurrency: int = Field(default=5, ge=1, le=10)
 
     # V2.1.5 execution-liquidity UX. These heuristics never affect strategy sizing.
     liquidity_adv_days: int = Field(default=20, ge=5, le=100)
@@ -78,7 +82,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.5.5"
+    app_version: str = "0.5.6"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"

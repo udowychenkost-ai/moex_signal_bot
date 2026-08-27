@@ -216,3 +216,69 @@ async def test_market_index_candles_use_index_endpoint() -> None:
     assert "/markets/index/securities/IMOEX/candles.json" in seen_path
     assert result[0].symbol == "IMOEX"
     assert result[0].close == 2820
+
+
+@pytest.mark.asyncio
+async def test_level1_batch_uses_official_marketdata_contract_and_lot_depth() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "marketdata": {
+                    "columns": [
+                        "BOARDID",
+                        "SECID",
+                        "BID",
+                        "BIDDEPTH",
+                        "OFFER",
+                        "OFFERDEPTH",
+                        "UPDATETIME",
+                        "SYSTIME",
+                    ],
+                    "data": [
+                        ["TQBR", "SBER", 268.20, 125, 268.21, 80, "12:00:00", "x"],
+                        ["TQBR", "GAZP", 84.00, None, 84.01, None, "12:00:00", "x"],
+                    ],
+                }
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_top_of_book_batch(["SBER", "GAZP"])
+
+    assert len(requests) == 1
+    assert requests[0].url.path.endswith("/boards/TQBR/securities.json")
+    assert requests[0].url.params["iss.only"] == "marketdata"
+    assert requests[0].url.params["securities"] == "GAZP,SBER"
+    assert {item.side for item in result["SBER"]} == {"B", "S"}
+    assert {item.quantity for item in result["SBER"]} == {80, 125}
+    assert all(item.quantity is None for item in result["GAZP"])
+    assert len({item.snapshot_at for values in result.values() for item in values}) == 1
+
+
+@pytest.mark.asyncio
+async def test_level1_batch_ignores_malformed_prices_without_inventing_levels() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "marketdata": {
+                    "columns": ["BOARDID", "SECID", "BID", "BIDDEPTH", "OFFER", "OFFERDEPTH"],
+                    "data": [["TQBR", "SBER", "bad", 100, 100.01, "bad"]],
+                }
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_top_of_book_batch(["SBER"])
+
+    assert len(result["SBER"]) == 1
+    assert result["SBER"][0].side == "S"
+    assert result["SBER"][0].quantity is None

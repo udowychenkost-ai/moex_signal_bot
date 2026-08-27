@@ -15,7 +15,9 @@ from app.domain import IdeaHorizon, IdeaStatus
 from app.migrations import HEAD_REVISION
 from app.models import (
     CandidateExperiment,
+    Instrument,
     JobRunState,
+    OrderBookLevel,
     PaperTrade,
     TradingIdea,
     TradingIdeaEvent,
@@ -76,7 +78,18 @@ class ApplicationStatus:
     pending_ideas: int
     ideas_closed_today: int
     scheduler_running: bool
+    orderbook: OrderBookStatus
     job_states: tuple[JobRunState, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBookStatus:
+    enabled: bool
+    last_update: datetime | None
+    fresh_instruments: int
+    monitored_instruments: int
+    stale_instruments: int
+    last_job: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,8 +207,52 @@ class OperationalService:
             states = tuple(
                 await session.scalars(select(JobRunState).order_by(JobRunState.job_name))
             )
+            active_tickers = tuple(
+                await session.scalars(
+                    select(Instrument.secid).where(Instrument.is_active.is_(True))
+                )
+            )
+            snapshot_rows = (
+                list(
+                    (
+                        await session.execute(
+                            select(
+                                OrderBookLevel.secid,
+                                func.max(OrderBookLevel.snapshot_at),
+                            )
+                            .where(OrderBookLevel.secid.in_(active_tickers))
+                            .group_by(OrderBookLevel.secid)
+                        )
+                    ).all()
+                )
+                if active_tickers
+                else []
+            )
         scan_state = next((item for item in states if item.job_name == "idea_scanning"), None)
+        orderbook_state = next(
+            (item for item in states if item.job_name == "order_book_ingestion"), None
+        )
         scan_job = self.scheduler.get_job("idea_scanning") if self.scheduler else None
+        snapshot_times = [aware_utc(row[1]) for row in snapshot_rows if row[1] is not None]
+        cutoff = checked_at - timedelta(seconds=self.settings.liquidity_orderbook_freshness_seconds)
+        fresh_orderbooks = sum(timestamp >= cutoff for timestamp in snapshot_times)
+        orderbook_last_job = "NEVER"
+        if not self.settings.enable_orderbook:
+            orderbook_last_job = "DISABLED"
+        elif orderbook_state is not None:
+            try:
+                details = json.loads(orderbook_state.details or "{}")
+            except json.JSONDecodeError:
+                details = {}
+            if not isinstance(details, dict):
+                details = {}
+            reported_status = details.get("status")
+            if reported_status in {"OK", "PARTIAL", "ERROR"}:
+                orderbook_last_job = reported_status
+            elif orderbook_state.success is True:
+                orderbook_last_job = "OK"
+            elif orderbook_state.success is False:
+                orderbook_last_job = "ERROR"
         return ApplicationStatus(
             app_version=self.settings.app_version,
             git_commit=self.settings.git_commit,
@@ -207,6 +264,14 @@ class OperationalService:
             pending_ideas=pending,
             ideas_closed_today=closed_today,
             scheduler_running=bool(self.scheduler and self.scheduler.running),
+            orderbook=OrderBookStatus(
+                enabled=self.settings.enable_orderbook,
+                last_update=max(snapshot_times, default=None),
+                fresh_instruments=fresh_orderbooks,
+                monitored_instruments=len(active_tickers),
+                stale_instruments=max(0, len(active_tickers) - fresh_orderbooks),
+                last_job=orderbook_last_job,
+            ),
             job_states=states,
         )
 

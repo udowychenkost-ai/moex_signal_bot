@@ -171,6 +171,7 @@ def format_lifecycle_event(
 
 def format_application_status(status: ApplicationStatus, *, timezone: str) -> str:
     freshness = status.freshness
+    orderbook = status.orderbook
     stale_note = ""
     if freshness.stale_examples:
         examples = ", ".join(
@@ -190,6 +191,11 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         f"Latest MOEX update: <b>{_format_time(freshness.latest_moex_update, timezone)}</b>\n"
         f"Data freshness: <b>{freshness.fresh}/{freshness.checked} fresh</b>"
         f"{stale_note}\n"
+        f"Order Book: <b>{'ENABLED' if orderbook.enabled else 'DISABLED'}</b>\n"
+        f"Order Book update: <b>{_format_time(orderbook.last_update, timezone)}</b>\n"
+        f"Order Book fresh: <b>{orderbook.fresh_instruments}/"
+        f"{orderbook.monitored_instruments}</b> · stale: <b>{orderbook.stale_instruments}</b>\n"
+        f"Order Book last job: <b>{escape(orderbook.last_job)}</b>\n"
         f"Latest scan: <b>{_format_time(status.latest_scan_time, timezone)}</b>\n"
         f"Next scan: <b>{_format_time(status.next_scan_time, timezone)}</b>\n"
         f"Active ideas: <b>{status.active_ideas}</b>\n"

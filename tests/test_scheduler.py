@@ -64,3 +64,15 @@ def test_one_scheduler_contains_separate_scan_and_report_tasks() -> None:
         "daily_summary",
     }
     assert scheduler.get_job("idea_scanning").next_run_time is not None
+
+
+def test_orderbook_scheduler_job_is_registered_only_when_enabled() -> None:
+    disabled_settings = Settings(_env_file=None, enable_orderbook=False)
+    enabled_settings = Settings(_env_file=None, enable_orderbook=True)
+    jobs = ScheduledJobs(enabled_settings, StubScanner(), StubReporting(), object())
+
+    disabled = build_scheduler(disabled_settings, jobs)
+    enabled = build_scheduler(enabled_settings, jobs)
+
+    assert disabled.get_job("order_book_ingestion") is None
+    assert enabled.get_job("order_book_ingestion") is not None
