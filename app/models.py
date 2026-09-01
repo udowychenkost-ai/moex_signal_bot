@@ -533,6 +533,43 @@ class PaperTrade(Base):
     exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ContextRecordV24(Base):
+    """Point-in-time fact envelope for v2.4 external context providers."""
+
+    __tablename__ = "context_records_v24"
+    __table_args__ = (
+        UniqueConstraint(
+            "context_type",
+            "subject",
+            "source",
+            "available_from",
+            "payload_hash",
+            name="uq_context_record_v24_fact",
+        ),
+        Index(
+            "ix_context_record_v24_asof",
+            "context_type",
+            "subject",
+            "available_from",
+            "fetched_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    context_type: Mapped[str] = mapped_column(String(24))
+    subject: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(128))
+    source_class: Mapped[str] = mapped_column(String(32))
+    publication_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    available_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data_confidence: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[str] = mapped_column(Text)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class TradeIdSequence(Base):
     """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
 

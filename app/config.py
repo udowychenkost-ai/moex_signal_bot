@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain import IdeaHorizon
+from app.v24_domain import SourceClass
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,18 @@ class Settings(BaseSettings):
     enable_orderbook: bool = False
     orderbook_interval_minutes: int = Field(default=2, ge=1, le=5)
     orderbook_request_concurrency: int = Field(default=5, ge=1, le=10)
+
+    # V2.4 Data SLA is deliberately fail-closed until the operator supplies all
+    # limits and required source classes. None means NOT_CONFIGURED, not zero.
+    data_sla_version: str = "v2_4_unconfigured"
+    max_latency_enter_now: float | None = Field(default=None, gt=0)
+    max_latency_position_management: float | None = Field(default=None, gt=0)
+    max_latency_intraday_analysis: float | None = Field(default=None, gt=0)
+    required_quote_source_class: str | None = None
+    required_volume_source_class: str | None = None
+    required_orderbook_source_class: str | None = None
+    microstructure_max_spread_pct: float | None = Field(default=None, gt=0, le=1)
+    microstructure_orderbook_max_age_seconds: float | None = Field(default=None, gt=0)
 
     # V2.1.5 execution-liquidity UX. These heuristics never affect strategy sizing.
     liquidity_adv_days: int = Field(default=20, ge=5, le=100)
@@ -184,6 +197,17 @@ class Settings(BaseSettings):
         if value not in {"5m", "15m", "1h", "4h", "1d", "1w"}:
             raise ValueError("default_timeframe must be one of 5m, 15m, 1h, 4h, 1d, 1w")
         return value
+
+    @field_validator(
+        "required_quote_source_class",
+        "required_volume_source_class",
+        "required_orderbook_source_class",
+    )
+    @classmethod
+    def validate_v24_source_class(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return SourceClass(value.strip().upper()).value
 
     @model_validator(mode="after")
     def validate_liquidity_settings(self) -> Settings:
