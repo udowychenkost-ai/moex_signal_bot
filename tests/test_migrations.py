@@ -56,6 +56,12 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         risk_budget_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(risk_budget_settings)")
         }
+        admission_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(statistical_admission_settings)"
+            )
+        }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
     assert {
@@ -79,6 +85,7 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "trade_event_journal",
         "context_records_v24",
         "risk_budget_settings",
+        "statistical_admission_settings",
     }.issubset(tables)
     assert {"report_frequency", "idea_horizon", "minimum_confidence"}.issubset(user_columns)
     assert {
@@ -120,6 +127,13 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         model_journal_columns
     )
     assert {
+        "calibration_setup",
+        "calibration_market_regime",
+        "calibration_volatility",
+        "calibration_time_of_day",
+        "calibration_liquidity_state",
+    }.issubset(model_journal_columns)
+    assert {
         "actual_trade_id",
         "confirmation_key",
         "confirmed_by_telegram_id",
@@ -132,6 +146,7 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "stop_after",
         "confirmed_by_telegram_id",
         "confirmation_key",
+        "costs_rub",
     }.issubset(event_journal_columns)
     assert {
         "configuration_version",
@@ -142,7 +157,15 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "max_sector_heat_pct",
         "max_correlated_factor_heat_pct",
     }.issubset(risk_budget_columns)
-    assert revision == ("20260901_0017",)
+    assert {
+        "configuration_version",
+        "min_oos_trades",
+        "min_forward_trades",
+        "max_confidence_interval_width",
+        "min_total_comparable_trades",
+        "degradation_expectancy_drop_r",
+    }.issubset(admission_columns)
+    assert revision == ("20260901_0018",)
 
 
 def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path) -> None:
@@ -315,7 +338,7 @@ async def test_gemini_telemetry_upgrade_preserves_existing_v2_log(tmp_path: Path
         ).fetchone()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert row == ("openai", "gpt-5-mini", 10, 0, "{}")
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) -> None:
@@ -351,7 +374,7 @@ async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) 
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert user == (101, "existing", 1)
     assert "idea_follows" in tables
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -371,7 +394,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -382,7 +405,7 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
@@ -398,7 +421,7 @@ async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -> None:
@@ -417,7 +440,7 @@ async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(tables)
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)
 
 
 async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -> None:
@@ -436,4 +459,4 @@ async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"market_candles", "fundamental_reports"}.issubset(tables)
-    assert revision == ("20260901_0017",)
+    assert revision == ("20260901_0018",)

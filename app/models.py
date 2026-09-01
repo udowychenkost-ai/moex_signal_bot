@@ -595,6 +595,40 @@ class RiskBudgetSetting(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class StatisticalAdmissionSetting(Base):
+    """Append-only admission/calibration policy for a strategy version."""
+
+    __tablename__ = "statistical_admission_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_version",
+            "configuration_version",
+            name="uq_statistical_admission_strategy_version",
+        ),
+        Index(
+            "ix_statistical_admission_effective",
+            "strategy_version",
+            "effective_from",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    configuration_version: Mapped[str] = mapped_column(String(64))
+    min_oos_trades: Mapped[int] = mapped_column(Integer)
+    min_forward_trades: Mapped[int] = mapped_column(Integer)
+    max_confidence_interval_width: Mapped[float] = mapped_column(Float)
+    min_total_comparable_trades: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    degradation_min_recent_trades: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    degradation_min_history_trades: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    degradation_expectancy_drop_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    degradation_win_rate_drop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    configured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class TradeIdSequence(Base):
     """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
 
@@ -723,6 +757,15 @@ class ModelTradeJournal(Base):
     strategy_version: Mapped[str] = mapped_column(String(64))
     sample_type: Mapped[str] = mapped_column(String(16))
     calibration_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    calibration_setup: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    calibration_direction: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    calibration_market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    calibration_trend: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    calibration_volatility: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    calibration_time_of_day: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    calibration_rr_bucket: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    calibration_liquidity_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    calibration_context: Mapped[str | None] = mapped_column(String(32), nullable=True)
     calibration_eligible: Mapped[bool] = mapped_column(Boolean)
     model_entry_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -840,6 +883,7 @@ class TradeEventJournal(Base):
     tp_after: Mapped[float | None] = mapped_column(Float, nullable=True)
     position_before: Mapped[float | None] = mapped_column(Float, nullable=True)
     position_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    costs_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
     data_sla: Mapped[str | None] = mapped_column(String(24), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_or_broker_note: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -292,3 +292,23 @@ class ActualTradeStatus(StrEnum):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
     CANCELLED = "CANCELLED"
+
+
+class DegradationStatus(StrEnum):
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    STABLE = "STABLE"
+    MODEL_CONFIDENCE_REDUCED = "MODEL_CONFIDENCE_REDUCED"
+
+
+class SetupLifecycleStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    WATCH = "WATCH"
+    DEGRADED = "DEGRADED"
+    SHADOW_ONLY = "SHADOW_ONLY"
+    RETIRED = "RETIRED"
+
+
+class RegimePerformanceStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    REGIME_PERFORMANCE_UNKNOWN = "REGIME_PERFORMANCE_UNKNOWN"

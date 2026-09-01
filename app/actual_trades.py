@@ -53,6 +53,7 @@ class ActualActionConfirmation:
     stop_after: float | None = None
     tp_after: float | None = None
     position_after: float | None = None
+    commission_rub: float | None = None
     reason: str | None = None
     notes: str | None = None
 
@@ -314,6 +315,11 @@ class ActualTradeService:
             "Остаток позиции",
             optional=True,
         )
+        commission = _non_negative(
+            confirmation.commission_rub,
+            "Комиссия",
+            optional=True,
+        )
 
         async with self.session_factory() as session, session.begin():
             existing = await session.scalar(
@@ -382,6 +388,7 @@ class ActualTradeService:
                     "tp_after": tp_after,
                     "position_before": state.position_value,
                     "position_after": position_after,
+                    "costs_rub": commission,
                     "reason": confirmation.reason or reason,
                     "source_or_broker_note": "TELEGRAM_USER_CONFIRMATION",
                     "notes": json.dumps(metadata, ensure_ascii=False, sort_keys=True),
