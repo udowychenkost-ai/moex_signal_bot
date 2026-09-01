@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 
@@ -124,7 +125,14 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "confirmed_by_telegram_id",
         "result_r",
     }.issubset(actual_journal_columns)
-    assert {"event_id", "event_type", "stop_before", "stop_after"}.issubset(event_journal_columns)
+    assert {
+        "event_id",
+        "event_type",
+        "stop_before",
+        "stop_after",
+        "confirmed_by_telegram_id",
+        "confirmation_key",
+    }.issubset(event_journal_columns)
     assert {
         "configuration_version",
         "working_capital_rub",
@@ -134,7 +142,7 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "max_sector_heat_pct",
         "max_correlated_factor_heat_pct",
     }.issubset(risk_budget_columns)
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path) -> None:
@@ -172,6 +180,50 @@ def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path
         }
     assert row == ("SBER", "B", 268.2, 125.0)
     assert columns["quantity"][3] == 0
+
+
+def test_actual_event_confirmation_upgrade_preserves_events_and_append_only_guard(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "existing-v24-events.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    config = migration_config(database_url)
+    command.upgrade(config, "20260901_0016")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO idea_journals (
+                trade_id, strategy_version, signal_datetime, ticker, direction
+            ) VALUES (
+                '20260901-SBER-LONG-01', 'intraday_v2_4',
+                '2026-09-01 08:30:00', 'SBER', 'LONG'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO trade_event_journal (
+                trade_id, event_datetime, event_type, reason
+            ) VALUES (
+                '20260901-SBER-LONG-01', '2026-09-01 08:31:00',
+                'OTHER', 'legacy event'
+            )
+            """
+        )
+        connection.commit()
+
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(database_path) as connection:
+        event = connection.execute(
+            """
+            SELECT event_type, reason, confirmed_by_telegram_id, confirmation_key
+            FROM trade_event_journal
+            """
+        ).fetchone()
+        assert event == ("OTHER", "legacy event", None, None)
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE trade_event_journal SET event_type = 'CANCEL'")
 
 
 def test_v2_upgrade_preserves_existing_trading_idea_as_v1(tmp_path: Path) -> None:
@@ -263,7 +315,7 @@ async def test_gemini_telemetry_upgrade_preserves_existing_v2_log(tmp_path: Path
         ).fetchone()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert row == ("openai", "gpt-5-mini", 10, 0, "{}")
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) -> None:
@@ -299,7 +351,7 @@ async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) 
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert user == (101, "existing", 1)
     assert "idea_follows" in tables
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -319,7 +371,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -330,7 +382,7 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
@@ -346,7 +398,7 @@ async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -> None:
@@ -365,7 +417,7 @@ async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(tables)
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)
 
 
 async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -> None:
@@ -384,4 +436,4 @@ async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"market_candles", "fundamental_reports"}.issubset(tables)
-    assert revision == ("20260901_0016",)
+    assert revision == ("20260901_0017",)

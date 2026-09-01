@@ -829,6 +829,8 @@ class TradeEventJournal(Base):
     actual_trade_id: Mapped[str | None] = mapped_column(
         ForeignKey("actual_trade_journals.actual_trade_id", ondelete="RESTRICT"), nullable=True
     )
+    confirmed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    confirmation_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     event_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     event_type: Mapped[str] = mapped_column(String(24))
     current_price: Mapped[float | None] = mapped_column(Float, nullable=True)

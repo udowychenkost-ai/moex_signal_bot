@@ -284,6 +284,8 @@ async def append_trade_event(
     event_datetime: datetime,
     model_trade_id: str | None = None,
     actual_trade_id: str | None = None,
+    confirmed_by_telegram_id: int | None = None,
+    confirmation_key: str | None = None,
     values: Mapping[str, Any] | None = None,
 ) -> TradeEventJournal:
     if await session.get(IdeaJournal, trade_id) is None:
@@ -296,6 +298,12 @@ async def append_trade_event(
         actual = await session.get(ActualTradeJournal, actual_trade_id)
         if actual is None or actual.trade_id != trade_id:
             raise ValueError("actual_trade_id does not belong to trade_id")
+        if confirmed_by_telegram_id is not None and (
+            actual.confirmed_by_telegram_id != confirmed_by_telegram_id
+        ):
+            raise ValueError("Only the user who confirmed the actual trade can append its events")
+    if confirmation_key is not None and not confirmation_key.strip():
+        raise ValueError("confirmation_key cannot be blank")
     extra = _without_reserved(
         values or {},
         {
@@ -303,6 +311,8 @@ async def append_trade_event(
             "trade_id",
             "model_trade_id",
             "actual_trade_id",
+            "confirmed_by_telegram_id",
+            "confirmation_key",
             "event_datetime",
             "event_type",
         },
@@ -311,6 +321,8 @@ async def append_trade_event(
         trade_id=trade_id,
         model_trade_id=model_trade_id,
         actual_trade_id=actual_trade_id,
+        confirmed_by_telegram_id=confirmed_by_telegram_id,
+        confirmation_key=confirmation_key.strip() if confirmation_key is not None else None,
         event_datetime=_normalize_signal_time(event_datetime),
         event_type=TradeEventType(str(_enum_value(event_type))).value,
         **_prepare_values(extra, set()),
@@ -392,12 +404,28 @@ async def create_actual_trade(
         trade_id=trade_id,
         model_trade_id=model_trade_id,
         actual_trade_id=actual.actual_trade_id,
+        confirmed_by_telegram_id=telegram_id,
+        confirmation_key=confirmation_key,
         event_datetime=actual.actual_entry_time,
         event_type=TradeEventType.ENTRY,
         values={
             "current_price": actual_entry,
-            "position_after": actual.actual_position_rub,
+            "position_after": (
+                actual.actual_position_shares
+                if actual.actual_position_shares is not None
+                else actual.actual_position_rub
+            ),
             "reason": "USER_CONFIRMED_ENTRY",
+            "source_or_broker_note": "TELEGRAM_USER_CONFIRMATION",
+            "notes": json.dumps(
+                {
+                    "position_unit": (
+                        "SHARES" if actual.actual_position_shares is not None else "RUB"
+                    )
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         },
     )
     return actual

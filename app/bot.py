@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     ForceReply,
@@ -21,6 +25,13 @@ from aiogram.types import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.actual_trades import (
+    ActualActionConfirmation,
+    ActualPositionState,
+    ActualTradeConfirmation,
+    ActualTradeError,
+    ActualTradeService,
+)
 from app.ai_ux import (
     format_current_ai_analysis,
     format_current_ai_unavailable,
@@ -85,8 +96,11 @@ from app.telegram_ui import (
     statistics_context_keyboard,
     status_context_keyboard,
     top_ideas_keyboard,
+    v24_actual_position_keyboard,
+    v24_entry_confirmation_keyboard,
     watchlist_keyboard,
 )
+from app.v24_domain import ActualTradeAction, ActualTradeStatus
 
 ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w"}
 logger = logging.getLogger(__name__)
@@ -105,6 +119,21 @@ class BotServices:
     on_demand_ai: OnDemandAIService | None = None
     gemini_health: GeminiHealthMonitor | None = None
     liquidity: LiquidityService | None = None
+    actual_trades: ActualTradeService | None = None
+
+
+class ActualEntryStates(StatesGroup):
+    price = State()
+    position = State()
+    execution_time = State()
+    commission = State()
+
+
+class ActualActionStates(StatesGroup):
+    stop = State()
+    exit_price = State()
+    remaining_position = State()
+    cancel_reason = State()
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -350,6 +379,87 @@ def _tokens(message: Message) -> list[str]:
     return (message.text or "").strip().split()
 
 
+def parse_actual_number(text: str, *, allow_zero: bool = False) -> float:
+    normalized = text.strip().replace(" ", "").replace(",", ".")
+    value = float(normalized)
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        raise ValueError("Значение должно быть положительным")
+    return value
+
+
+def parse_actual_position(text: str) -> tuple[float | None, float | None]:
+    normalized = text.strip().lower().replace(" ", "")
+    share_suffixes = ("шт", "акций", "акции", "shares", "share")
+    rub_suffixes = ("руб", "₽", "rub")
+    for suffix in share_suffixes:
+        if normalized.endswith(suffix):
+            value = parse_actual_number(normalized[: -len(suffix)])
+            return value, None
+    for suffix in rub_suffixes:
+        if normalized.endswith(suffix):
+            value = parse_actual_number(normalized[: -len(suffix)])
+            return None, value
+    raise ValueError("Укажите единицу: например 100 шт или 25000 руб")
+
+
+def parse_actual_execution_time(
+    text: str,
+    *,
+    now: datetime | None = None,
+    timezone: str = "Europe/Moscow",
+) -> datetime:
+    zone = ZoneInfo(timezone)
+    reference = (now or datetime.now(UTC)).astimezone(zone)
+    normalized = text.strip().lower()
+    if normalized in {"сейчас", "now"}:
+        return reference
+    formats = (
+        ("%d.%m.%Y %H:%M", False),
+        ("%d.%m %H:%M", True),
+        ("%H:%M", True),
+    )
+    for pattern, fill_date in formats:
+        try:
+            parsed = datetime.strptime(normalized, pattern)
+        except ValueError:
+            continue
+        if fill_date and pattern == "%d.%m %H:%M":
+            parsed = parsed.replace(year=reference.year)
+        elif fill_date:
+            parsed = parsed.replace(
+                year=reference.year,
+                month=reference.month,
+                day=reference.day,
+            )
+        return parsed.replace(tzinfo=zone)
+    raise ValueError("Время: «сейчас», HH:MM или DD.MM.YYYY HH:MM")
+
+
+def format_actual_position(state: ActualPositionState) -> str:
+    status = {
+        ActualTradeStatus.OPEN: "ОТКРЫТА",
+        ActualTradeStatus.CLOSED: "ЗАКРЫТА",
+        ActualTradeStatus.CANCELLED: "ОТМЕНЕНА",
+    }[state.status]
+    unit = "акций" if state.position_unit == "SHARES" else "₽"
+    return (
+        f"🧾 <b>Фактическая позиция {escape(state.ticker)}</b>\n\n"
+        f"Trade ID: <code>{escape(state.trade_id)}</code>\n"
+        f"Статус: <b>{status}</b>\n"
+        f"Направление: <b>{escape(state.direction)}</b>\n"
+        f"Вход: <b>{state.entry_price:g}</b>\n"
+        f"Позиция: <b>{state.position_value:g} {unit}</b>\n"
+        f"Текущий стоп: <b>{state.current_stop if state.current_stop is not None else 'нет'}</b>\n"
+        f"Текущая цель: <b>{state.current_tp if state.current_tp is not None else 'нет'}</b>\n"
+        f"Событий в журнале: <b>{state.event_count}</b>\n\n"
+        "Бот только ведёт журнал. Никакие поручения брокеру не отправляются."
+    )
+
+
+def _telegram_message_key(message: Message, action: str) -> str:
+    return f"tg-message:{message.chat.id}:{message.message_id}:{action}"
+
+
 async def _answer_long(
     message: Message,
     text: str,
@@ -557,6 +667,7 @@ def create_router(services: BotServices) -> Router:
             "/best — лучшие торговые идеи\n"
             "/ideas — активные и ожидающие идеи\n"
             "/idea ID — идея и полная lifecycle-история\n"
+            "/actual TRADE_ID — ручной журнал фактической позиции v2.4\n"
             "/status — состояние приложения, MOEX и scheduler\n"
             "/stats — forward-статистика за 7/30 дней и всё время\n"
             "/signal SBER [15m] — сигнал сейчас\n"
@@ -577,11 +688,420 @@ def create_router(services: BotServices) -> Router:
         await callback.answer()
 
     @router.callback_query(F.data == "home")
-    async def home(callback: CallbackQuery) -> None:
+    async def home(callback: CallbackQuery, state: FSMContext) -> None:
         await _ensure_callback_user(callback, services)
+        await state.clear()
         if callback.message is not None:
             await callback.message.answer("🏠 <b>Главное меню</b>", reply_markup=main_menu())
         await callback.answer()
+
+    @router.message(Command("actual"))
+    async def actual_trade_command(message: Message) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.actual_trades is None:
+            await message.answer("Журнал фактических позиций v2.4 не подключён.")
+            return
+        tokens = _tokens(message)
+        if len(tokens) != 2:
+            await message.answer("Формат: <code>/actual 20260901-SBER-LONG-01</code>")
+            return
+        trade_id = tokens[1].upper()
+        try:
+            existing = await services.actual_trades.get_position_for_trade(
+                trade_id,
+                telegram_id=user.telegram_id,
+            )
+            idea = await services.actual_trades.get_idea(trade_id)
+        except ActualTradeError as error:
+            await message.answer(escape(str(error)))
+            return
+        if existing is not None:
+            await message.answer(
+                format_actual_position(existing),
+                reply_markup=(
+                    v24_actual_position_keyboard(existing.actual_trade_id)
+                    if existing.status is ActualTradeStatus.OPEN
+                    else None
+                ),
+            )
+            return
+        await message.answer(
+            f"🧾 <b>Ручное подтверждение v2.4</b>\n\n"
+            f"Trade ID: <code>{escape(idea.trade_id)}</code>\n"
+            f"{escape(idea.ticker)} · {escape(idea.direction)}\n\n"
+            "Нажимайте кнопку только если вы действительно вошли в позицию. "
+            "Бот не видит брокерский счёт и не отправляет торговые поручения.",
+            reply_markup=v24_entry_confirmation_keyboard(idea.trade_id),
+        )
+
+    @router.callback_query(F.data.startswith("actual_enter:"))
+    async def actual_entry_start(callback: CallbackQuery, state: FSMContext) -> None:
+        user = await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None or services.actual_trades is None:
+            await callback.answer("Журнал actual trades недоступен", show_alert=True)
+            return
+        trade_id = callback.data.partition(":")[2]
+        try:
+            idea = await services.actual_trades.get_idea(trade_id)
+            existing = await services.actual_trades.get_position_for_trade(
+                trade_id,
+                telegram_id=user.telegram_id,
+            )
+        except ActualTradeError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        if existing is not None:
+            await callback.message.answer(
+                format_actual_position(existing),
+                reply_markup=(
+                    v24_actual_position_keyboard(existing.actual_trade_id)
+                    if existing.status is ActualTradeStatus.OPEN
+                    else None
+                ),
+            )
+            await callback.answer("Позиция уже подтверждена", show_alert=True)
+            return
+        await state.clear()
+        await state.update_data(actual_trade_id=idea.trade_id)
+        await state.set_state(ActualEntryStates.price)
+        await callback.message.answer(
+            f"Фактический вход для <b>{escape(idea.ticker)}</b>.\n"
+            "Введите исполненную цену:",
+            reply_markup=ForceReply(selective=True, input_field_placeholder="268,45"),
+        )
+        await callback.answer("Начато ручное подтверждение")
+
+    @router.message(ActualEntryStates.price)
+    async def actual_entry_price(message: Message, state: FSMContext) -> None:
+        await _ensure_message_user(message, services)
+        try:
+            price = parse_actual_number(message.text or "")
+        except ValueError:
+            await message.answer(
+                "Введите положительную фактическую цену, например <code>268,45</code>."
+            )
+            return
+        await state.update_data(entry_price=price)
+        await state.set_state(ActualEntryStates.position)
+        await message.answer(
+            "Введите <b>одно</b> из двух:\n"
+            "• количество акций — <code>100 шт</code>\n"
+            "• сумму позиции — <code>25000 руб</code>",
+            reply_markup=ForceReply(selective=True),
+        )
+
+    @router.message(ActualEntryStates.position)
+    async def actual_entry_position(message: Message, state: FSMContext) -> None:
+        await _ensure_message_user(message, services)
+        try:
+            shares, rub = parse_actual_position(message.text or "")
+        except ValueError as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.update_data(position_shares=shares, position_rub=rub)
+        await state.set_state(ActualEntryStates.execution_time)
+        await message.answer(
+            "Введите время фактического исполнения: <code>сейчас</code>, "
+            "<code>14:35</code> или <code>01.09.2026 14:35</code>.",
+            reply_markup=ForceReply(selective=True),
+        )
+
+    @router.message(ActualEntryStates.execution_time)
+    async def actual_entry_time(message: Message, state: FSMContext) -> None:
+        await _ensure_message_user(message, services)
+        try:
+            execution_time = parse_actual_execution_time(
+                message.text or "",
+                timezone=services.settings.scheduler_timezone,
+            )
+        except ValueError as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.update_data(entry_time=execution_time)
+        await state.set_state(ActualEntryStates.commission)
+        await message.answer(
+            "Комиссия в рублях (необязательно). Введите сумму или <code>нет</code>.",
+            reply_markup=ForceReply(selective=True),
+        )
+
+    @router.message(ActualEntryStates.commission)
+    async def actual_entry_commission(message: Message, state: FSMContext) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.actual_trades is None:
+            await state.clear()
+            await message.answer("Журнал actual trades недоступен.")
+            return
+        raw_commission = (message.text or "").strip().lower()
+        try:
+            commission = (
+                0.0
+                if raw_commission in {"нет", "no", "-", "0", "0,0", "0.0"}
+                else parse_actual_number(raw_commission, allow_zero=True)
+            )
+        except ValueError:
+            await message.answer("Введите комиссию числом или слово <code>нет</code>.")
+            return
+        data = await state.get_data()
+        try:
+            result = await services.actual_trades.confirm_entry(
+                ActualTradeConfirmation(
+                    trade_id=str(data["actual_trade_id"]),
+                    telegram_id=user.telegram_id,
+                    confirmation_key=_telegram_message_key(message, "ENTRY"),
+                    entry_time=data["entry_time"],
+                    entry_price=float(data["entry_price"]),
+                    position_shares=data.get("position_shares"),
+                    position_rub=data.get("position_rub"),
+                    commission_rub=commission,
+                    notes="Подтверждено пользователем через Telegram wizard",
+                )
+            )
+            position = await services.actual_trades.get_position(
+                result.actual.actual_trade_id,
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, KeyError, TypeError, ValueError) as error:
+            await state.clear()
+            await message.answer(f"Не удалось записать подтверждение: {escape(str(error))}")
+            return
+        await state.clear()
+        await message.answer(
+            ("✅ <b>Фактический вход записан</b>\n\n" + format_actual_position(position)),
+            reply_markup=v24_actual_position_keyboard(position.actual_trade_id),
+        )
+
+    async def record_simple_actual_action(
+        callback: CallbackQuery,
+        *,
+        action: ActualTradeAction,
+        actual_trade_id: str,
+    ) -> None:
+        user = await _ensure_callback_user(callback, services)
+        if callback.message is None or services.actual_trades is None:
+            await callback.answer("Журнал actual trades недоступен", show_alert=True)
+            return
+        try:
+            await services.actual_trades.record_action(
+                ActualActionConfirmation(
+                    actual_trade_id=actual_trade_id,
+                    telegram_id=user.telegram_id,
+                    confirmation_key=f"tg-callback:{callback.id}:{action.value}",
+                    action=action,
+                    event_time=datetime.now(UTC),
+                )
+            )
+            position = await services.actual_trades.get_position(
+                actual_trade_id,
+                telegram_id=user.telegram_id,
+            )
+        except ActualTradeError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await callback.message.answer(
+            "✅ Действие подтверждено пользователем и добавлено в журнал.\n\n"
+            + format_actual_position(position),
+            reply_markup=(
+                v24_actual_position_keyboard(actual_trade_id)
+                if position.status is ActualTradeStatus.OPEN
+                else None
+            ),
+        )
+        await callback.answer("Записано")
+
+    @router.callback_query(F.data.startswith("actual_action:"))
+    async def actual_action_start(callback: CallbackQuery, state: FSMContext) -> None:
+        user = await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None or services.actual_trades is None:
+            await callback.answer("Журнал actual trades недоступен", show_alert=True)
+            return
+        try:
+            _, raw_action, actual_trade_id = callback.data.split(":", maxsplit=2)
+            action = ActualTradeAction(raw_action)
+            position = await services.actual_trades.get_position(
+                actual_trade_id,
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, ValueError) as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        if position.status is not ActualTradeStatus.OPEN:
+            await callback.answer("Позиция уже закрыта или отменена", show_alert=True)
+            return
+        if action in {ActualTradeAction.HOLD, ActualTradeAction.BREAK_EVEN}:
+            await record_simple_actual_action(
+                callback,
+                action=action,
+                actual_trade_id=actual_trade_id,
+            )
+            return
+
+        await state.clear()
+        await state.update_data(
+            actual_trade_id=actual_trade_id,
+            actual_action=action.value,
+            position_unit=position.position_unit,
+        )
+        if action in {ActualTradeAction.MOVE_STOP, ActualTradeAction.LOCK_PROFIT}:
+            await state.set_state(ActualActionStates.stop)
+            prompt = "Введите новый фактически установленный уровень стопа."
+        elif action in {
+            ActualTradeAction.PARTIAL_CLOSE,
+            ActualTradeAction.REDUCE,
+            ActualTradeAction.FULL_CLOSE,
+        }:
+            await state.set_state(ActualActionStates.exit_price)
+            prompt = "Введите фактическую цену исполнения действия."
+        else:
+            await state.set_state(ActualActionStates.cancel_reason)
+            prompt = "Укажите причину отмены позиции."
+        await callback.message.answer(prompt, reply_markup=ForceReply(selective=True))
+        await callback.answer("Ожидаю фактические данные")
+
+    @router.message(ActualActionStates.stop)
+    async def actual_action_stop(message: Message, state: FSMContext) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.actual_trades is None:
+            await state.clear()
+            return
+        data = await state.get_data()
+        try:
+            stop = parse_actual_number(message.text or "")
+            action = ActualTradeAction(str(data["actual_action"]))
+            await services.actual_trades.record_action(
+                ActualActionConfirmation(
+                    actual_trade_id=str(data["actual_trade_id"]),
+                    telegram_id=user.telegram_id,
+                    confirmation_key=_telegram_message_key(message, action.value),
+                    action=action,
+                    event_time=datetime.now(UTC),
+                    stop_after=stop,
+                )
+            )
+            position = await services.actual_trades.get_position(
+                str(data["actual_trade_id"]),
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, KeyError, ValueError) as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.clear()
+        await message.answer(
+            "✅ Изменение стопа подтверждено и записано.\n\n" + format_actual_position(position),
+            reply_markup=v24_actual_position_keyboard(position.actual_trade_id),
+        )
+
+    @router.message(ActualActionStates.exit_price)
+    async def actual_action_exit_price(message: Message, state: FSMContext) -> None:
+        await _ensure_message_user(message, services)
+        data = await state.get_data()
+        try:
+            exit_price = parse_actual_number(message.text or "")
+            action = ActualTradeAction(str(data["actual_action"]))
+        except (KeyError, ValueError) as error:
+            await message.answer(escape(str(error)))
+            return
+        if action in {ActualTradeAction.PARTIAL_CLOSE, ActualTradeAction.REDUCE}:
+            await state.update_data(exit_price=exit_price)
+            await state.set_state(ActualActionStates.remaining_position)
+            unit = "акций" if data.get("position_unit") == "SHARES" else "рублей"
+            await message.answer(
+                f"Введите фактический остаток позиции в {unit}.",
+                reply_markup=ForceReply(selective=True),
+            )
+            return
+        if services.actual_trades is None:
+            await state.clear()
+            return
+        user = await _ensure_message_user(message, services)
+        try:
+            await services.actual_trades.record_action(
+                ActualActionConfirmation(
+                    actual_trade_id=str(data["actual_trade_id"]),
+                    telegram_id=user.telegram_id,
+                    confirmation_key=_telegram_message_key(message, action.value),
+                    action=action,
+                    event_time=datetime.now(UTC),
+                    current_price=exit_price,
+                )
+            )
+            position = await services.actual_trades.get_position(
+                str(data["actual_trade_id"]),
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, KeyError, ValueError) as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.clear()
+        await message.answer("✅ Полное закрытие записано.\n\n" + format_actual_position(position))
+
+    @router.message(ActualActionStates.remaining_position)
+    async def actual_action_remaining(message: Message, state: FSMContext) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.actual_trades is None:
+            await state.clear()
+            return
+        data = await state.get_data()
+        try:
+            remaining = parse_actual_number(message.text or "", allow_zero=True)
+            action = ActualTradeAction(str(data["actual_action"]))
+            await services.actual_trades.record_action(
+                ActualActionConfirmation(
+                    actual_trade_id=str(data["actual_trade_id"]),
+                    telegram_id=user.telegram_id,
+                    confirmation_key=_telegram_message_key(message, action.value),
+                    action=action,
+                    event_time=datetime.now(UTC),
+                    current_price=float(data["exit_price"]),
+                    position_after=remaining,
+                )
+            )
+            position = await services.actual_trades.get_position(
+                str(data["actual_trade_id"]),
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, KeyError, ValueError) as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.clear()
+        await message.answer(
+            "✅ Частичное действие подтверждено и записано.\n\n"
+            + format_actual_position(position),
+            reply_markup=v24_actual_position_keyboard(position.actual_trade_id),
+        )
+
+    @router.message(ActualActionStates.cancel_reason)
+    async def actual_action_cancel(message: Message, state: FSMContext) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.actual_trades is None:
+            await state.clear()
+            return
+        reason = (message.text or "").strip()
+        if not reason:
+            await message.answer("Укажите непустую причину отмены.")
+            return
+        data = await state.get_data()
+        try:
+            await services.actual_trades.record_action(
+                ActualActionConfirmation(
+                    actual_trade_id=str(data["actual_trade_id"]),
+                    telegram_id=user.telegram_id,
+                    confirmation_key=_telegram_message_key(message, "CANCEL"),
+                    action=ActualTradeAction.CANCEL,
+                    event_time=datetime.now(UTC),
+                    reason=reason,
+                )
+            )
+            position = await services.actual_trades.get_position(
+                str(data["actual_trade_id"]),
+                telegram_id=user.telegram_id,
+            )
+        except (ActualTradeError, KeyError, ValueError) as error:
+            await message.answer(escape(str(error)))
+            return
+        await state.clear()
+        await message.answer(
+            "✅ Отмена подтверждена и записана.\n\n" + format_actual_position(position)
+        )
 
     async def send_best_ideas(message: Message) -> None:
         user = await _ensure_message_user(message, services)

@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.ai_ux import has_historical_ai_review
 from app.idea_repository import OPEN_IDEA_STATUSES
 from app.models import TradingIdea
+from app.v24_domain import ActualTradeAction
 
 
 def moex_url(ticker: str) -> str:
@@ -98,6 +99,50 @@ def liquidity_context_keyboard(idea_id: int) -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(text="🏠 Главное меню", callback_data="home"),
             ]
+        ]
+    )
+
+
+def v24_entry_confirmation_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Я вошёл в сделку",
+                    callback_data=f"actual_enter:{trade_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")],
+        ]
+    )
+
+
+def v24_actual_position_keyboard(actual_trade_id: str) -> InlineKeyboardMarkup:
+    def button(text: str, action: ActualTradeAction) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            text=text,
+            callback_data=f"actual_action:{action.value}:{actual_trade_id}",
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button("⏸ HOLD", ActualTradeAction.HOLD),
+                button("🛡 MOVE STOP", ActualTradeAction.MOVE_STOP),
+            ],
+            [
+                button("⚖️ BREAK EVEN", ActualTradeAction.BREAK_EVEN),
+                button("🔒 LOCK PROFIT", ActualTradeAction.LOCK_PROFIT),
+            ],
+            [
+                button("➗ PARTIAL CLOSE", ActualTradeAction.PARTIAL_CLOSE),
+                button("📉 REDUCE", ActualTradeAction.REDUCE),
+            ],
+            [
+                button("⛔ FULL CLOSE", ActualTradeAction.FULL_CLOSE),
+                button("🚫 CANCEL", ActualTradeAction.CANCEL),
+            ],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")],
         ]
     )
 

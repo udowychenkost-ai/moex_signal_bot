@@ -275,3 +275,20 @@ class ExecutionAction(StrEnum):
     NO_CHASE = "NO_CHASE"
     RECALCULATE = "RECALCULATE"
     NO_TRADE = "NO_TRADE"
+
+
+class ActualTradeAction(StrEnum):
+    HOLD = "HOLD"
+    MOVE_STOP = "MOVE_STOP"
+    BREAK_EVEN = "BREAK_EVEN"
+    LOCK_PROFIT = "LOCK_PROFIT"
+    PARTIAL_CLOSE = "PARTIAL_CLOSE"
+    REDUCE = "REDUCE"
+    FULL_CLOSE = "FULL_CLOSE"
+    CANCEL = "CANCEL"
+
+
+class ActualTradeStatus(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"

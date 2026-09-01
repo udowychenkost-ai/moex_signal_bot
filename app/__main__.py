@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+from app.actual_trades import ActualTradeService
 from app.ai_analyst import AIAnalystService
 from app.ai_providers import GeminiProvider
 from app.backtest import BacktestEngine
@@ -200,6 +201,7 @@ async def run_bot() -> None:
                 ),
                 gemini_health,
                 liquidity,
+                ActualTradeService(session_factory),
             )
             recovery_tracking = await tracker.track_all()
             recovery_tracking.update(await experiment_tracker.track_all())
