@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -530,3 +531,253 @@ class PaperTrade(Base):
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class TradeIdSequence(Base):
+    """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
+
+    __tablename__ = "trade_id_sequences"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(36), primary_key=True)
+    direction: Mapped[str] = mapped_column(String(8), primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer)
+
+
+class IdeaJournal(Base):
+    """Immutable initial v2.4 decision card; later changes belong in events."""
+
+    __tablename__ = "idea_journals"
+    __table_args__ = (
+        CheckConstraint("direction IN ('LONG', 'SHORT')", name="ck_idea_journal_direction"),
+        Index("ix_idea_journals_signal", "signal_datetime"),
+        Index("ix_idea_journals_ticker", "ticker", "signal_datetime"),
+        Index("ix_idea_journals_strategy", "strategy_version", "signal_datetime"),
+    )
+
+    trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    signal_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ticker: Mapped[str] = mapped_column(String(36))
+    direction: Mapped[str] = mapped_column(String(8))
+    setup: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    market_bias: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    data_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    data_sla_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    data_sla_result: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    price_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_delay_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_set: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fundamental_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    news_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    catalyst: Mapped[str | None] = mapped_column(Text, nullable=True)
+    setup_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    optimal_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    acceptable_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    no_chase_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    initial_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    runner_target: Mapped[float | None] = mapped_column(Float, nullable=True)
+    path_to_tp_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gross_rr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    normal_exit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fast_exit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stress_exit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_safe_position: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recommended_position: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_to_stop_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_to_stop_pct_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+    probability_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stated_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calibration_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    statistical_admission_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    opportunity_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    microstructure_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    risk_budget_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    journal_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    audit_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    final_classification: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    final_decision: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_for_trade: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adversarial_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DecisionSnapshotV24(Base):
+    """Point-in-time v2.4 evidence. Database triggers reject update/delete."""
+
+    __tablename__ = "decision_snapshots_v24"
+
+    trade_id: Mapped[str] = mapped_column(
+        ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), primary_key=True
+    )
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    signal_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ticker: Mapped[str] = mapped_column(String(36), index=True)
+    direction: Mapped[str] = mapped_column(String(8))
+    price_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_delay_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    data_sla: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sources: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    market_bias: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    setup: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    setup_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity_inputs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_inputs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    news_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calibration_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    final_decision: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    gate_results: Mapped[str] = mapped_column(Text, default="{}")
+    evidence_status: Mapped[str] = mapped_column(String(40), default="AVAILABLE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ModelTradeJournal(Base):
+    __tablename__ = "model_trade_journals"
+    __table_args__ = (
+        UniqueConstraint("trade_id", name="uq_model_trade_journal_trade"),
+        Index("ix_model_trade_sample", "sample_type", "model_entry_time"),
+        Index("ix_model_trade_strategy", "strategy_version", "model_entry_time"),
+    )
+
+    model_trade_id: Mapped[str] = mapped_column(String(72), primary_key=True)
+    trade_id: Mapped[str] = mapped_column(
+        ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), index=True
+    )
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    sample_type: Mapped[str] = mapped_column(String(16))
+    calibration_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    calibration_eligible: Mapped[bool] = mapped_column(Boolean)
+    model_entry_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    model_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_order_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    model_fill_status: Mapped[str] = mapped_column(String(16))
+    initial_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_position_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_exit_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    final_exit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gross_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    initial_risk_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    result_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    win_1_0: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tp_before_sl_1_0: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mfe_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capture_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    holding_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stated_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    setup_quality_at_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_quality_at_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    data_sla_at_entry: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    ambiguous_execution: Mapped[bool] = mapped_column(Boolean, default=False)
+    gap_slippage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ActualTradeJournal(Base):
+    __tablename__ = "actual_trade_journals"
+    __table_args__ = (
+        UniqueConstraint("trade_id", name="uq_actual_trade_journal_trade"),
+        UniqueConstraint("confirmation_key", name="uq_actual_trade_confirmation"),
+        Index("ix_actual_trade_strategy", "strategy_version", "actual_entry_time"),
+    )
+
+    actual_trade_id: Mapped[str] = mapped_column(String(72), primary_key=True)
+    model_trade_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_trade_journals.model_trade_id", ondelete="RESTRICT"), nullable=True
+    )
+    trade_id: Mapped[str] = mapped_column(
+        ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), index=True
+    )
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    confirmed_by_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    confirmation_key: Mapped[str] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actual_entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actual_entry: Mapped[float] = mapped_column(Float)
+    actual_position_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_position_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_slippage_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    initial_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_entry_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_exit_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_exit_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_exit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gross_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    initial_risk_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    result_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    win_1_0: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mfe_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capture_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    holding_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_quality_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class TradeEventJournal(Base):
+    """Append-only audit record for model and user-confirmed actual trades."""
+
+    __tablename__ = "trade_event_journal"
+    __table_args__ = (
+        Index("ix_trade_event_trade", "trade_id", "event_datetime"),
+        Index("ix_trade_event_model", "model_trade_id", "event_datetime"),
+        Index("ix_trade_event_actual", "actual_trade_id", "event_datetime"),
+    )
+
+    event_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_id: Mapped[str] = mapped_column(
+        ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), index=True
+    )
+    model_trade_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_trade_journals.model_trade_id", ondelete="RESTRICT"), nullable=True
+    )
+    actual_trade_id: Mapped[str | None] = mapped_column(
+        ForeignKey("actual_trade_journals.actual_trade_id", ondelete="RESTRICT"), nullable=True
+    )
+    event_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_type: Mapped[str] = mapped_column(String(24))
+    current_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    data_sla: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_or_broker_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
