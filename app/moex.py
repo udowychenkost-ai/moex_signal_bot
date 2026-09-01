@@ -22,6 +22,7 @@ from app.domain import (
 logger = logging.getLogger(__name__)
 
 SOURCE_INTERVALS = {
+    "1m": 1,
     "5m": 1,
     "15m": 1,
     "1h": 60,

@@ -214,3 +214,64 @@ class PathToTargetStatus(StrEnum):
     ACCEPTABLE = "ACCEPTABLE"
     BLOCKED = "BLOCKED"
     UNKNOWN = "UNKNOWN"
+
+
+class IntradayStrategyMode(StrEnum):
+    INTRADAY = "INTRADAY"
+
+
+class MarketTrendRegime(StrEnum):
+    STRONG_UPTREND = "STRONG_UPTREND"
+    UPTREND = "UPTREND"
+    RANGE = "RANGE"
+    DOWNTREND = "DOWNTREND"
+    STRONG_DOWNTREND = "STRONG_DOWNTREND"
+
+
+class VolatilityStateV24(StrEnum):
+    HIGH_VOL = "HIGH_VOL"
+    NORMAL_VOL = "NORMAL_VOL"
+    LOW_VOL = "LOW_VOL"
+    ABNORMAL = "ABNORMAL"
+
+
+class EventStateV24(StrEnum):
+    NORMAL = "NORMAL"
+    NEWS_DRIVEN = "NEWS_DRIVEN"
+    PANIC = "PANIC"
+    DATA_NOT_AVAILABLE = "DATA_NOT_AVAILABLE"
+
+
+class MarketBiasV24(StrEnum):
+    STRONG_LONG = "STRONG_LONG"
+    LONG = "LONG"
+    NEUTRAL = "NEUTRAL"
+    SHORT = "SHORT"
+    STRONG_SHORT = "STRONG_SHORT"
+
+
+class VolumeProfileStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    DATA_NOT_AVAILABLE = "DATA_NOT_AVAILABLE"
+
+
+class StructureState(StrEnum):
+    HH_HL = "HH_HL"
+    LH_LL = "LH_LL"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+class BreakoutState(StrEnum):
+    NONE = "NONE"
+    BREAKOUT = "BREAKOUT"
+    RETEST = "RETEST"
+    FALSE_BREAKOUT = "FALSE_BREAKOUT"
+
+
+class ExecutionAction(StrEnum):
+    ENTER = "ENTER"
+    WAIT = "WAIT"
+    NO_CHASE = "NO_CHASE"
+    RECALCULATE = "RECALCULATE"
+    NO_TRADE = "NO_TRADE"

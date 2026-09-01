@@ -23,6 +23,7 @@ from app.repositories import (
 logger = logging.getLogger(__name__)
 
 LOOKBACK = {
+    "1m": timedelta(days=1),
     "5m": timedelta(days=3),
     "15m": timedelta(days=7),
     "1h": timedelta(days=120),
@@ -31,6 +32,7 @@ LOOKBACK = {
     "1w": timedelta(days=1800),
 }
 OVERLAP = {
+    "1m": timedelta(hours=2),
     "5m": timedelta(days=1),
     "15m": timedelta(days=1),
     "1h": timedelta(days=3),
@@ -128,6 +130,47 @@ class IngestionService:
         }
         logger.info("Market data sync complete: %s", counters)
         return counters
+
+    async def sync_intraday_v24(self) -> dict[str, int]:
+        """Reuse the canonical MOEX client for the isolated v2.4 MTF pipeline."""
+        if not self.settings.intraday_v24_enabled:
+            return {"candles": 0, "market_candles": 0, "errors": 0}
+        async with self.session_factory() as session:
+            instruments = [
+                item for item in await list_active_instruments(session) if item.echelon in {1, 2}
+            ]
+        candle_count = 0
+        market_count = 0
+        errors = 0
+        for instrument in instruments:
+            for timeframe in self.settings.intraday_v24_timeframe_list:
+                try:
+                    candle_count += await self.sync_candles(
+                        instrument.secid,
+                        timeframe,
+                        board_id=instrument.board_id,
+                    )
+                except Exception:
+                    errors += 1
+                    logger.exception(
+                        "V2.4 intraday ingestion failed ticker=%s timeframe=%s",
+                        instrument.secid,
+                        timeframe,
+                    )
+        for timeframe in self.settings.intraday_v24_timeframe_list:
+            try:
+                market_count += await self.sync_market_candles(
+                    self.settings.market_benchmark,
+                    timeframe,
+                )
+            except Exception:
+                errors += 1
+                logger.exception(
+                    "V2.4 benchmark ingestion failed symbol=%s timeframe=%s",
+                    self.settings.market_benchmark,
+                    timeframe,
+                )
+        return {"candles": candle_count, "market_candles": market_count, "errors": errors}
 
     async def sync_market_context(self) -> tuple[int, int]:
         if not self.settings.market_context_enabled:

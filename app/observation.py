@@ -12,6 +12,7 @@ from app.horizons import get_horizon_profile
 from app.models import Candle, Instrument, MarketCandle
 
 TIMEFRAME_DURATIONS = {
+    "1m": timedelta(minutes=1),
     "5m": timedelta(minutes=5),
     "15m": timedelta(minutes=15),
     "1h": timedelta(hours=1),

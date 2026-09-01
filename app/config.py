@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     position_observation_mode: Literal["RESEARCH", "PAPER"] = "PAPER"
 
+    # Isolated MASTER PROMPT v2.4 intraday mode. It never replaces historical
+    # INTRADAY_1D cohorts and remains disabled until its production gates are configured.
+    intraday_v24_enabled: bool = False
+    intraday_v24_strategy_version: str = "intraday_v2_4"
+    intraday_v24_execution_1m_enabled: bool = False
+    intraday_v24_max_holding_trading_days: int = Field(default=2, ge=1, le=2)
+    intraday_v24_leverage_enabled: bool = False
+
     blue_chip_tickers: str = (
         "SBER,GAZP,LKOH,YDEX,NVTK,GMKN,TATN,ROSN,PLZL,MOEX,"
         "MTSS,MGNT,CHMF,NLMK,ALRS,VTBR,SIBN,PHOR,IRAO,SNGS"
@@ -283,6 +291,13 @@ class Settings(BaseSettings):
     def analysis_timeframe_list(self) -> list[str]:
         required = ["5m", "15m", "1h", "4h", "1d", "1w"]
         return list(dict.fromkeys([*required, *self.timeframe_list]))
+
+    @property
+    def intraday_v24_timeframe_list(self) -> list[str]:
+        required = ["1d", "1h", "15m", "5m"]
+        if self.intraday_v24_execution_1m_enabled:
+            required.append("1m")
+        return required
 
     @property
     def liquidity_book_bands(self) -> tuple[float, ...]:

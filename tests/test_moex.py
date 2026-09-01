@@ -9,6 +9,39 @@ from app.moex import MoexClient
 
 
 @pytest.mark.asyncio
+async def test_one_minute_candles_use_native_interval_without_resampling() -> None:
+    seen_interval = 0
+    columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+    rows = [
+        [100, 100.5, 101, 99, 1000, 10, "2025-01-10 10:00:00", "2025-01-10 10:00:59"],
+        [100.5, 101, 102, 100, 1500, 15, "2025-01-10 10:01:00", "2025-01-10 10:01:59"],
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_interval
+        seen_interval = int(request.url.params["interval"])
+        return httpx.Response(
+            200,
+            json={
+                "candles": {"columns": columns, "data": rows},
+                "candles.cursor": {
+                    "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                    "data": [[0, 2, 100]],
+                },
+            },
+        )
+
+    async with MoexClient(
+        "https://iss.moex.test/iss", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = await client.fetch_candles("SBER", "1m", datetime(2025, 1, 10, tzinfo=UTC))
+
+    assert seen_interval == 1
+    assert len(result) == 2
+    assert [item.close for item in result] == [100.5, 101]
+
+
+@pytest.mark.asyncio
 async def test_minute_candles_are_resampled_to_fifteen_minutes() -> None:
     columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
     rows = []
