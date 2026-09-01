@@ -629,6 +629,31 @@ class StatisticalAdmissionSetting(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class KillSwitchEvent(Base):
+    """Append-only v2.4 capital-preservation state transition."""
+
+    __tablename__ = "kill_switch_events"
+    __table_args__ = (Index("ix_kill_switch_state_time", "state", "triggered_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state: Mapped[str] = mapped_column(String(32))
+    reasons: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(64))
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class JournalHealthProbe(Base):
+    """Write-and-rollback target used to verify journal persistence safely."""
+
+    __tablename__ = "journal_health_probes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class TradeIdSequence(Base):
     """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
 
