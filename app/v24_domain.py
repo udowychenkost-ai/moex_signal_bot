@@ -184,3 +184,33 @@ class TradingSessionState(StrEnum):
     RESUMPTION = "RESUMPTION"
     CLOSED = "CLOSED"
     UNKNOWN = "UNKNOWN"
+
+
+class CostConfigurationStatus(StrEnum):
+    CONFIGURED = "CONFIGURED"
+    PARTIAL = "PARTIAL"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+
+
+class RiskBudgetStatus(StrEnum):
+    CONFIGURED = "CONFIGURED"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+
+
+class CalculationReliability(StrEnum):
+    RELIABLE = "RELIABLE"
+    PROVISIONAL = "PROVISIONAL"
+    NOT_RELIABLY_CALCULABLE = "NOT_RELIABLY_CALCULABLE"
+
+
+class OpportunityRankingMode(StrEnum):
+    CALIBRATED_EV = "CALIBRATED_EV"
+    COLD_START_COMPOSITE = "COLD_START_COMPOSITE"
+    NOT_RELIABLY_CALCULABLE = "NOT_RELIABLY_CALCULABLE"
+
+
+class PathToTargetStatus(StrEnum):
+    CLEAN = "CLEAN"
+    ACCEPTABLE = "ACCEPTABLE"
+    BLOCKED = "BLOCKED"
+    UNKNOWN = "UNKNOWN"

@@ -570,6 +570,31 @@ class ContextRecordV24(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class RiskBudgetSetting(Base):
+    """Append-only operator risk policy; a new version replaces an old policy."""
+
+    __tablename__ = "risk_budget_settings"
+    __table_args__ = (
+        UniqueConstraint("scope", "configuration_version", name="uq_risk_budget_scope_version"),
+        Index("ix_risk_budget_effective", "scope", "effective_from"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(64), default="GLOBAL")
+    configuration_version: Mapped[str] = mapped_column(String(64))
+    working_capital_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_risk_per_trade_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_daily_loss_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_portfolio_heat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_sector_heat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_correlated_factor_heat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    available_capital_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    configured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class TradeIdSequence(Base):
     """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
 

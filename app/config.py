@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     microstructure_max_spread_pct: float | None = Field(default=None, gt=0, le=1)
     microstructure_orderbook_max_age_seconds: float | None = Field(default=None, gt=0)
 
+    # V2.4 production liquidity/risk values have no pseudo-user defaults.
+    liquidity_v2_adv_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_session_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_orderbook_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_normal_exit_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_fast_exit_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_stress_exit_participation_rate: float | None = Field(default=None, gt=0, le=1)
+    liquidity_v2_max_expected_slippage_bps: float | None = Field(default=None, ge=0)
+    liquidity_v2_max_market_impact_bps: float | None = Field(default=None, ge=0)
+
     # V2.1.5 execution-liquidity UX. These heuristics never affect strategy sizing.
     liquidity_adv_days: int = Field(default=20, ge=5, le=100)
     liquidity_turnover_participation: float = Field(default=0.0025, gt=0, le=0.05)
@@ -244,6 +254,20 @@ class Settings(BaseSettings):
             raise ValueError("Liquidity rating weights must sum to 1")
         if self.liquidity_medium_rating_score > self.liquidity_high_rating_score:
             raise ValueError("Liquidity rating scores must be ordered medium <= high")
+        if (
+            self.liquidity_v2_normal_exit_participation_rate is not None
+            and self.liquidity_v2_fast_exit_participation_rate is not None
+            and self.liquidity_v2_fast_exit_participation_rate
+            > self.liquidity_v2_normal_exit_participation_rate
+        ):
+            raise ValueError("V2 fast-exit participation cannot exceed normal-exit participation")
+        if (
+            self.liquidity_v2_fast_exit_participation_rate is not None
+            and self.liquidity_v2_stress_exit_participation_rate is not None
+            and self.liquidity_v2_stress_exit_participation_rate
+            > self.liquidity_v2_fast_exit_participation_rate
+        ):
+            raise ValueError("V2 stress-exit participation cannot exceed fast-exit participation")
         return self
 
     @property
