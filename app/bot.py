@@ -60,12 +60,20 @@ from app.ingestion import IngestionService
 from app.liquidity import LiquidityAssessment, LiquidityService
 from app.liquidity_ux import format_liquidity_details
 from app.market_overview import MarketOverviewService, format_market_overview
-from app.models import CandidateExperiment, SignalRecord, TelegramUser, TradingIdea
+from app.models import (
+    CandidateExperiment,
+    DecisionSnapshotV24,
+    IdeaJournal,
+    SignalRecord,
+    TelegramUser,
+    TradingIdea,
+)
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService, realized_r
 from app.paper import PaperTradingService, format_paper_summary
 from app.provider_health import GeminiHealthMonitor, format_gemini_diagnostics
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
+from app.reporting_v24 import V24IdeaDisplayContext, format_v24_idea_card
 from app.repositories import (
     add_watchlist_item,
     ensure_user,
@@ -97,10 +105,16 @@ from app.telegram_ui import (
     status_context_keyboard,
     top_ideas_keyboard,
     v24_actual_position_keyboard,
-    v24_entry_confirmation_keyboard,
+    v24_idea_keyboard,
     watchlist_keyboard,
 )
-from app.v24_domain import ActualTradeAction, ActualTradeStatus
+from app.v24_domain import (
+    ActualTradeAction,
+    ActualTradeStatus,
+    CalibrationStatus,
+    ProbabilityStatus,
+    SetupLifecycleStatus,
+)
 
 ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w"}
 logger = logging.getLogger(__name__)
@@ -460,6 +474,22 @@ def _telegram_message_key(message: Message, action: str) -> str:
     return f"tg-message:{message.chat.id}:{message.message_id}:{action}"
 
 
+def _v24_display_context(idea: IdeaJournal) -> V24IdeaDisplayContext:
+    calibrated = idea.probability_status == ProbabilityStatus.CALIBRATED.value
+    return V24IdeaDisplayContext(
+        probability_status=(
+            ProbabilityStatus.CALIBRATED
+            if calibrated
+            else ProbabilityStatus.NOT_RELIABLY_CALIBRATED
+        ),
+        calibrated_probability=idea.stated_probability if calibrated else None,
+        calibration_status=(
+            CalibrationStatus.CALIBRATED if calibrated else CalibrationStatus.UNCALIBRATED
+        ),
+        setup_status=SetupLifecycleStatus.SHADOW_ONLY,
+    )
+
+
 async def _answer_long(
     message: Message,
     text: str,
@@ -726,13 +756,63 @@ def create_router(services: BotServices) -> Router:
             )
             return
         await message.answer(
-            f"🧾 <b>Ручное подтверждение v2.4</b>\n\n"
-            f"Trade ID: <code>{escape(idea.trade_id)}</code>\n"
-            f"{escape(idea.ticker)} · {escape(idea.direction)}\n\n"
-            "Нажимайте кнопку только если вы действительно вошли в позицию. "
-            "Бот не видит брокерский счёт и не отправляет торговые поручения.",
-            reply_markup=v24_entry_confirmation_keyboard(idea.trade_id),
+            format_v24_idea_card(idea, _v24_display_context(idea), compact=True),
+            reply_markup=v24_idea_keyboard(idea.trade_id),
         )
+
+    @router.callback_query(F.data.startswith("v24_card:"))
+    async def v24_full_card(callback: CallbackQuery) -> None:
+        await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None or services.actual_trades is None:
+            await callback.answer("V2.4 journal недоступен", show_alert=True)
+            return
+        trade_id = callback.data.partition(":")[2]
+        try:
+            idea = await services.actual_trades.get_idea(trade_id)
+        except ActualTradeError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await _edit_context(
+            callback,
+            format_v24_idea_card(idea, _v24_display_context(idea)),
+            v24_idea_keyboard(trade_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("v24_audit:"))
+    async def v24_audit_card(callback: CallbackQuery) -> None:
+        await _ensure_callback_user(callback, services)
+        if callback.data is None or callback.message is None:
+            await callback.answer()
+            return
+        trade_id = callback.data.partition(":")[2]
+        async with services.session_factory() as session:
+            snapshot = await session.get(DecisionSnapshotV24, trade_id)
+        if snapshot is None:
+            await callback.answer("Immutable audit snapshot не найден", show_alert=True)
+            return
+        try:
+            payload = json.loads(snapshot.gate_results or "{}")
+        except json.JSONDecodeError:
+            payload = {"status": "INVALID_STORED_JSON"}
+        final_audit = payload.get("final_audit", {}) if isinstance(payload, dict) else {}
+        gates = final_audit.get("gates", {}) if isinstance(final_audit, dict) else {}
+        lines = [
+            "🧪 <b>V2.4 FINAL AUDIT</b>",
+            f"Trade ID: <code>{escape(trade_id)}</code>",
+            "",
+        ]
+        if isinstance(gates, dict):
+            lines.extend(
+                f"{'✅' if result == 'PASS' else ('➖' if result == 'NOT_REQUIRED' else '❌')} "
+                f"{escape(str(gate))}: <b>{escape(str(result))}</b>"
+                for gate, result in gates.items()
+            )
+        else:
+            lines.append("Audit matrix недоступна.")
+        lines.append("\nHard FAIL не может быть перекрыт Gemini или средним score.")
+        await _edit_context(callback, "\n".join(lines), v24_idea_keyboard(trade_id))
+        await callback.answer()
 
     @router.callback_query(F.data.startswith("actual_enter:"))
     async def actual_entry_start(callback: CallbackQuery, state: FSMContext) -> None:

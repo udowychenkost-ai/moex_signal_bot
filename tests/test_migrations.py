@@ -58,12 +58,16 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         }
         admission_columns = {
             row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(statistical_admission_settings)"
-            )
+            for row in connection.execute("PRAGMA table_info(statistical_admission_settings)")
         }
         kill_switch_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(kill_switch_events)")
+        }
+        daily_v24_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(daily_journal_summaries_v24)")
+        }
+        outbox_v24_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(v24_notification_outbox)")
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
@@ -91,6 +95,8 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "statistical_admission_settings",
         "kill_switch_events",
         "journal_health_probes",
+        "daily_journal_summaries_v24",
+        "v24_notification_outbox",
     }.issubset(tables)
     assert {"report_frequency", "idea_horizon", "minimum_confidence"}.issubset(user_columns)
     assert {
@@ -177,7 +183,21 @@ def test_alembic_upgrade_creates_trading_idea_schema(tmp_path: Path) -> None:
         "triggered_at",
         "created_by_telegram_id",
     }.issubset(kill_switch_columns)
-    assert revision == ("20260901_0019",)
+    assert {
+        "summary_date",
+        "model_net_pl_rub",
+        "actual_net_pl_rub",
+        "data_issues",
+        "lessons",
+    }.issubset(daily_v24_columns)
+    assert {
+        "notification_key",
+        "notification_type",
+        "payload",
+        "status",
+        "attempt_count",
+    }.issubset(outbox_v24_columns)
+    assert revision == ("20260901_0020",)
 
 
 def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path) -> None:
@@ -215,6 +235,43 @@ def test_orderbook_nullable_depth_upgrade_preserves_existing_rows(tmp_path: Path
         }
     assert row == ("SBER", "B", 268.2, 125.0)
     assert columns["quantity"][3] == 0
+
+
+def test_v24_reporting_upgrade_preserves_previous_head_and_summary_is_immutable(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "v24-reporting-upgrade.db"
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    config = migration_config(database_url)
+    command.upgrade(config, "20260901_0019")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO idea_journals (
+                trade_id, strategy_version, signal_datetime, ticker, direction, created_at
+            ) VALUES (
+                '20260901-SBER-LONG-01', 'intraday_v2_4',
+                '2026-09-01 09:00:00', 'SBER', 'LONG', '2026-09-01 09:00:00'
+            )
+            """
+        )
+        connection.commit()
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        preserved = connection.execute(
+            "SELECT ticker, strategy_version FROM idea_journals"
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO daily_journal_summaries_v24 (
+                summary_date, strategy_version, ideas_issued,
+                model_trades_opened, model_trades_closed, actual_trades_confirmed
+            ) VALUES ('2026-09-01', 'intraday_v2_4', 1, 0, 0, 0)
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute("UPDATE daily_journal_summaries_v24 SET ideas_issued = 2")
+    assert preserved == ("SBER", "intraday_v2_4")
 
 
 def test_actual_event_confirmation_upgrade_preserves_events_and_append_only_guard(
@@ -350,7 +407,7 @@ async def test_gemini_telemetry_upgrade_preserves_existing_v2_log(tmp_path: Path
         ).fetchone()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert row == ("openai", "gpt-5-mini", 10, 0, "{}")
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) -> None:
@@ -386,7 +443,7 @@ async def test_context_ux_upgrade_preserves_previous_head_users(tmp_path: Path) 
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert user == (101, "existing", 1)
     assert "idea_follows" in tables
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -> None:
@@ -406,7 +463,7 @@ async def test_auto_migration_adopts_unversioned_legacy_schema(tmp_path: Path) -
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert "trading_ideas" in tables
     assert "paper_trades" in tables
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
@@ -417,7 +474,7 @@ async def test_auto_migration_creates_fresh_database(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -> None:
@@ -433,7 +490,7 @@ async def test_auto_migration_adopts_unversioned_previous_head(tmp_path: Path) -
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"entry_fill_price", "exit_fill_price", "slippage"}.issubset(paper_columns)
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -> None:
@@ -452,7 +509,7 @@ async def test_auto_migration_upgrades_unversioned_0007_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"trading_idea_snapshots", "forward_notifications", "job_run_states"}.issubset(tables)
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)
 
 
 async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -> None:
@@ -471,4 +528,4 @@ async def test_auto_migration_upgrades_unversioned_0008_schema(tmp_path: Path) -
         }
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert {"market_candles", "fundamental_reports"}.issubset(tables)
-    assert revision == ("20260901_0019",)
+    assert revision == ("20260901_0020",)

@@ -12,6 +12,7 @@ from app.config import Settings
 from app.operations import OperationalService
 from app.orderbook_ingestion import OrderBookIngestionService
 from app.scanner import MarketScanner
+from app.scheduler_v24 import V24SchedulerCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class ScheduledJobs:
         bot: Bot,
         operations: OperationalService | None = None,
         orderbooks: OrderBookIngestionService | None = None,
+        v24_coordinator: V24SchedulerCoordinator | None = None,
     ) -> None:
         self.settings = settings
         self.scanner = scanner
@@ -32,6 +34,7 @@ class ScheduledJobs:
         self.bot = bot
         self.operations = operations
         self.orderbooks = orderbooks
+        self.v24_coordinator = v24_coordinator
 
     async def _run(
         self,
@@ -96,6 +99,11 @@ class ScheduledJobs:
         )
         return result
 
+    async def intraday_v24_cycle(self) -> dict[str, Any]:
+        if self.v24_coordinator is None:
+            return {"enabled": False, "status": "NOT_CONFIGURED", "errors": 0}
+        return await self._run("intraday_v24_cycle", self.v24_coordinator.run)
+
     async def track_lifecycle(self) -> dict[str, Any]:
         async def track_and_paper() -> dict[str, Any]:
             tracking = await self.scanner.track_lifecycle()
@@ -115,6 +123,12 @@ class ScheduledJobs:
         if operation is None:
             return {"sent": 0, "errors": 0}
         return await self._run("daily_summary", lambda: operation(self.bot))
+
+    async def v24_market_summary(self) -> dict[str, Any]:
+        operation = getattr(self.reporting, "dispatch_v24_market_summary", None)
+        if operation is None:
+            return {"queued": 0, "sent": 0, "errors": 0}
+        return await self._run("v24_market_summary", lambda: operation(self.bot))
 
 
 def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler:
@@ -170,6 +184,18 @@ def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler
         next_run_time=now + timedelta(seconds=45),
         **common,
     )
+    if settings.intraday_v24_enabled and jobs.v24_coordinator is not None:
+        scheduler.add_job(
+            jobs.intraday_v24_cycle,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour="10-18",
+            minute=f"*/{settings.scanning_interval_minutes}",
+            second=35,
+            id="intraday_v24_cycle",
+            next_run_time=now + timedelta(seconds=35),
+            **common,
+        )
     scheduler.add_job(
         jobs.dispatch_reports,
         trigger="interval",
@@ -187,4 +213,14 @@ def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler
         id="daily_summary",
         **common,
     )
+    if settings.intraday_v24_enabled:
+        scheduler.add_job(
+            jobs.v24_market_summary,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=settings.intraday_v24_market_summary_hour,
+            minute=0,
+            id="v24_market_summary",
+            **common,
+        )
     return scheduler

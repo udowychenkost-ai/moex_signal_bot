@@ -118,6 +118,8 @@ class Settings(BaseSettings):
     intraday_v24_execution_1m_enabled: bool = False
     intraday_v24_max_holding_trading_days: int = Field(default=2, ge=1, le=2)
     intraday_v24_leverage_enabled: bool = False
+    intraday_v24_structural_atr_buffer_multiplier: float | None = Field(default=None, gt=0)
+    intraday_v24_market_summary_hour: int = Field(default=11, ge=0, le=23)
 
     blue_chip_tickers: str = (
         "SBER,GAZP,LKOH,YDEX,NVTK,GMKN,TATN,ROSN,PLZL,MOEX,"

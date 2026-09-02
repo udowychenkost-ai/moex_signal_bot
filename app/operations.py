@@ -23,6 +23,7 @@ from app.models import (
     TradingIdeaEvent,
     TradingIdeaSnapshot,
 )
+from app.observability_v24 import V24ObservabilityService, V24RuntimeStatus
 from app.observation import DataFreshnessGuard, FreshnessOverview, aware_utc
 
 
@@ -80,6 +81,7 @@ class ApplicationStatus:
     scheduler_running: bool
     orderbook: OrderBookStatus
     job_states: tuple[JobRunState, ...]
+    v24: V24RuntimeStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,10 +122,12 @@ class OperationalService:
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
         freshness: DataFreshnessGuard,
+        v24_observability: V24ObservabilityService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.freshness = freshness
+        self.v24_observability = v24_observability
         self.scheduler: AsyncIOScheduler | None = None
 
     def attach_scheduler(self, scheduler: AsyncIOScheduler) -> None:
@@ -273,6 +277,11 @@ class OperationalService:
                 last_job=orderbook_last_job,
             ),
             job_states=states,
+            v24=(
+                await self.v24_observability.status(now=checked_at)
+                if self.v24_observability is not None
+                else None
+            ),
         )
 
     async def statistics(self, *, now: datetime | None = None) -> tuple[PeriodStatistics, ...]:

@@ -35,6 +35,7 @@ from app.market_context import MarketRegimeService
 from app.market_overview import MarketOverviewService
 from app.migrations import migrate_database
 from app.moex import MoexClient
+from app.observability_v24 import V24ObservabilityService
 from app.observation import DataFreshnessGuard
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService
@@ -43,9 +44,11 @@ from app.paper import PaperTradingService
 from app.provider_health import GeminiHealthMonitor
 from app.quality import QualityGate
 from app.reporting import ReportingService
+from app.reporting_v24 import DailyJournalServiceV24, V24OutboxService
 from app.repositories import get_active_instrument, get_candles, list_active_instruments
 from app.scanner import MarketScanner
 from app.scheduler import ScheduledJobs, build_scheduler
+from app.scheduler_v24 import V24SchedulerCoordinator
 from app.signals import SignalService
 
 logger = logging.getLogger(__name__)
@@ -170,13 +173,33 @@ async def run_bot() -> None:
                 ai_analyst=ai_analyst,
                 experiment_tracker=experiment_tracker,
             )
-            operations = OperationalService(settings, session_factory, freshness)
+            operations = OperationalService(
+                settings,
+                session_factory,
+                freshness,
+                V24ObservabilityService(
+                    settings,
+                    session_factory,
+                    gemini_health=gemini_health,
+                ),
+            )
             liquidity = LiquidityService(settings, session_factory)
+            market_overview_service = MarketOverviewService(
+                session_factory,
+                benchmark=settings.market_benchmark,
+                ai_analyst=ai_analyst,
+            )
             forward_reporting = ForwardReportingService(
                 settings,
                 session_factory,
                 operations,
                 liquidity,
+                DailyJournalServiceV24(
+                    session_factory,
+                    timezone=settings.scheduler_timezone,
+                ),
+                V24OutboxService(session_factory),
+                market_overview_service,
             )
             services = BotServices(
                 settings,
@@ -186,11 +209,7 @@ async def run_bot() -> None:
                 reporting,
                 paper,
                 operations,
-                MarketOverviewService(
-                    session_factory,
-                    benchmark=settings.market_benchmark,
-                    ai_analyst=ai_analyst,
-                ),
+                market_overview_service,
                 OnDemandAIService(
                     settings,
                     session_factory,
@@ -218,6 +237,11 @@ async def run_bot() -> None:
                 bot,
                 operations,
                 orderbooks=orderbooks,
+                v24_coordinator=(
+                    V24SchedulerCoordinator.from_services(session_factory, ingestion)
+                    if settings.intraday_v24_enabled
+                    else None
+                ),
             )
             scheduler = build_scheduler(settings, jobs)
             operations.attach_scheduler(scheduler)

@@ -117,6 +117,30 @@ def v24_entry_confirmation_keyboard(trade_id: str) -> InlineKeyboardMarkup:
     )
 
 
+def v24_idea_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📋 Все параметры",
+                    callback_data=f"v24_card:{trade_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🧪 Audit matrix",
+                    callback_data=f"v24_audit:{trade_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✅ Я вошёл в сделку",
+                    callback_data=f"actual_enter:{trade_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")],
+        ]
+    )
+
+
 def v24_actual_position_keyboard(actual_trade_id: str) -> InlineKeyboardMarkup:
     def button(text: str, action: ActualTradeAction) -> InlineKeyboardButton:
         return InlineKeyboardButton(

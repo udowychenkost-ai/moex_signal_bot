@@ -654,6 +654,56 @@ class JournalHealthProbe(Base):
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class DailyJournalSummaryV24(Base):
+    __tablename__ = "daily_journal_summaries_v24"
+    __table_args__ = (
+        UniqueConstraint("summary_date", "strategy_version", name="uq_daily_journal_v24"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    summary_date: Mapped[date] = mapped_column(Date)
+    strategy_version: Mapped[str] = mapped_column(String(64))
+    ideas_issued: Mapped[int] = mapped_column(Integer)
+    model_trades_opened: Mapped[int] = mapped_column(Integer)
+    model_trades_closed: Mapped[int] = mapped_column(Integer)
+    actual_trades_confirmed: Mapped[int] = mapped_column(Integer)
+    model_net_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_net_pl_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_avg_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_avg_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_trade: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    worst_trade: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    max_intraday_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True)
+    data_issues: Mapped[str] = mapped_column(Text, default="{}")
+    execution_issues: Mapped[str] = mapped_column(Text, default="{}")
+    false_positives: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    false_rejects: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_violations: Mapped[int] = mapped_column(Integer, default=0)
+    lessons: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class V24NotificationOutbox(Base):
+    __tablename__ = "v24_notification_outbox"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", "notification_key", name="uq_v24_notification_outbox"),
+        Index("ix_v24_outbox_pending", "status", "available_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger)
+    notification_key: Mapped[str] = mapped_column(String(160))
+    notification_type: Mapped[str] = mapped_column(String(40))
+    trade_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class TradeIdSequence(Base):
     """Atomic per-day sequence used to build auditable v2.4 trade IDs."""
 

@@ -18,6 +18,7 @@ from app.domain import IdeaHorizon, IdeaStatus
 from app.idea_repository import OPEN_IDEA_STATUSES
 from app.liquidity import LiquidityAssessment, LiquidityService
 from app.liquidity_ux import format_liquidity_compact
+from app.market_overview import MarketOverviewService, format_market_overview
 from app.models import (
     ForwardNotification,
     IdeaFollow,
@@ -36,6 +37,11 @@ from app.operations import (
     realized_r,
 )
 from app.reporting import HORIZON_LABELS
+from app.reporting_v24 import (
+    DailyJournalServiceV24,
+    V24OutboxService,
+    format_daily_journal_summary,
+)
 from app.telegram_ui import idea_context_keyboard, lifecycle_context_keyboard
 
 logger = logging.getLogger(__name__)
@@ -183,7 +189,7 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         marker = "✅" if state.success else ("❌" if state.success is False else "⏳")
         jobs.append(f"{marker} {escape(state.job_name)}")
     jobs_text = ", ".join(jobs) if jobs else "ещё не запускались"
-    return (
+    base = (
         "🩺 <b>LIVE OBSERVATION STATUS</b>\n\n"
         f"App version: <b>{escape(status.app_version)}</b>\n"
         f"Git commit: <code>{escape(status.git_commit)}</code>\n"
@@ -203,6 +209,34 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         f"Ideas closed today: <b>{status.ideas_closed_today}</b>\n"
         f"Scheduler: <b>{'RUNNING' if status.scheduler_running else 'STOPPED'}</b>\n"
         f"Jobs: {jobs_text}"
+    )
+    if status.v24 is None:
+        return base
+    v24 = status.v24
+    kill_reasons = ", ".join(item.value for item in v24.kill_switch.reasons) or "нет"
+    return (
+        base
+        + "\n\n<b>INTRADAY V2.4</b>\n"
+        + f"Mode: <b>{'ENABLED' if v24.enabled else 'DISABLED'}</b>\n"
+        + f"Alembic: <b>{escape(v24.journal.revision or 'UNKNOWN')}</b>\n"
+        + f"Gemini: <b>{escape(v24.gemini)}</b>\n"
+        + f"Journal: <b>{'AVAILABLE' if v24.journal.available else 'ERROR'}</b>\n"
+        + f"Data SLA: <b>{v24.data_sla.value}</b>\n"
+        + f"Risk Budget: <b>{v24.risk_budget.value}</b>\n"
+        + f"Statistical Admission: <b>{v24.statistical_admission.value}</b>\n"
+        + f"Calibration: <b>{v24.calibration.value}</b>\n"
+        + f"Kill Switch: <b>{v24.kill_switch.state.value}</b>\n"
+        + f"Kill reasons: <b>{escape(kill_reasons)}</b>\n"
+        + f"MODEL / ACTUAL: <b>{v24.model_trade_count} / {v24.actual_trade_count}</b>\n"
+        + f"Ambiguous execution: <b>{v24.ambiguous_execution_count}</b>\n"
+        + f"Uncalibrated signals: <b>{v24.uncalibrated_signal_count}</b>\n"
+        + f"Data availability failures: <b>{v24.data_availability_failure_count}</b>\n"
+        + f"Journal writes / errors: <b>{v24.journal_write_count} / "
+        + f"{v24.journal_error_count}</b>\n"
+        + "Microstructure: <b>"
+        + escape(json.dumps(v24.microstructure_distribution, sort_keys=True))
+        + "</b>\n"
+        + f"Audit failures: <b>{escape(json.dumps(v24.audit_failure_reasons, sort_keys=True))}</b>"
     )
 
 
@@ -412,11 +446,17 @@ class ForwardReportingService:
         session_factory: async_sessionmaker[AsyncSession],
         operations: OperationalService,
         liquidity: LiquidityService | None = None,
+        v24_daily: DailyJournalServiceV24 | None = None,
+        v24_outbox: V24OutboxService | None = None,
+        market_overview: MarketOverviewService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.operations = operations
         self.liquidity = liquidity
+        self.v24_daily = v24_daily
+        self.v24_outbox = v24_outbox
+        self.market_overview = market_overview
         self.started_at = datetime.now(UTC)
 
     async def _recipients(self) -> dict[int, TelegramUser | None]:
@@ -640,6 +680,10 @@ class ForwardReportingService:
                         telegram_id,
                         event.id,
                     )
+        if self.v24_outbox is not None:
+            v24 = await self.v24_outbox.dispatch(bot, now=sent_at)
+            counters["sent"] += v24["sent"]
+            counters["errors"] += v24["errors"]
         return counters
 
     async def dispatch_daily_summary(
@@ -745,4 +789,62 @@ class ForwardReportingService:
             except Exception:
                 counters["errors"] += 1
                 logger.exception("Daily summary failed for chat=%s", telegram_id)
+        if (
+            self.settings.intraday_v24_enabled
+            and self.v24_daily is not None
+            and self.v24_outbox is not None
+        ):
+            record = await self.v24_daily.persist(
+                local.date(),
+                strategy_version=self.settings.intraday_v24_strategy_version,
+            )
+            payload = format_daily_journal_summary(record)
+            for telegram_id, user in recipients.items():
+                if user is not None and not user.notify_daily_summary:
+                    continue
+                await self.v24_outbox.enqueue(
+                    telegram_id=telegram_id,
+                    notification_key=f"v24-daily:{local.date().isoformat()}",
+                    notification_type="V24_DAILY_JOURNAL",
+                    payload=payload,
+                    available_at=sent_at,
+                )
+            v24 = await self.v24_outbox.dispatch(bot, now=sent_at)
+            counters["sent"] += v24["sent"]
+            counters["errors"] += v24["errors"]
         return counters
+
+    async def dispatch_v24_market_summary(
+        self,
+        bot: Bot,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        checked_at = aware_utc(now or datetime.now(UTC))
+        if (
+            not self.settings.intraday_v24_enabled
+            or self.v24_outbox is None
+            or self.market_overview is None
+        ):
+            return {"queued": 0, "sent": 0, "errors": 0}
+        local = checked_at.astimezone(ZoneInfo(self.settings.scheduler_timezone))
+        if local.hour < self.settings.intraday_v24_market_summary_hour:
+            return {"queued": 0, "sent": 0, "errors": 0}
+        overview = await self.market_overview.current()
+        payload = format_market_overview(overview)
+        recipients = await self._recipients()
+        queued = 0
+        for telegram_id in recipients:
+            queued += await self.v24_outbox.enqueue_market_summary_once(
+                telegram_id=telegram_id,
+                payload=payload,
+                now=checked_at,
+                timezone=self.settings.scheduler_timezone,
+                after_hour=self.settings.intraday_v24_market_summary_hour,
+            )
+        dispatched = await self.v24_outbox.dispatch(bot, now=checked_at)
+        return {
+            "queued": queued,
+            "sent": dispatched["sent"],
+            "errors": dispatched["errors"],
+        }
