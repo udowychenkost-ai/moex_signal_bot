@@ -132,3 +132,51 @@ versioned, fail-closed journal/gate system separating model and user-confirmed
 actual execution. Real-time news, borrow information, full public L2 and several
 cross-asset facts are externally blocked and must remain unavailable until a
 reliable provider is explicitly configured.
+
+## Post-implementation status (0.6.0)
+
+The table above is the immutable phase-0 baseline. The implementation was then
+delivered in atomic phases through Alembic `20260901_0020`. This section is the
+authoritative final status; it deliberately distinguishes implemented reusable
+services from a registered live production path.
+
+| Sections | Final status | Evidence / remaining gap |
+|---|---|---|
+| 0–1 | IMPLEMENTED | `intraday_v2_4` isolation and this baseline/final audit |
+| 2 | PARTIAL | Isolated config/profile, universe/leverage/holding constraints exist; live scan-to-journal orchestrator is not registered |
+| 3 | IMPLEMENTED | Canonical ingestion for 1d/1h/15m/5m; 1m stays optional and quality-gated |
+| 4 | PARTIAL / BLOCKED BY DATA SOURCE | Extended technical snapshot, VWAP, structure, ranges and anchors exist; reliable volume profile is unavailable |
+| 5–6 | IMPLEMENTED | Deterministic setup classifier and V2.4 regime/bias services |
+| 7 | PARTIAL / BLOCKED BY DATA SOURCE | Point-in-time context envelopes/persistence; no fabricated real-time news, events, full cross-asset or borrow facts |
+| 8–10 | IMPLEMENTED / DATA DEPENDENT | Integrity, SLA and microstructure guards fail closed; production PASS depends on configured/available facts |
+| 11–18 | IMPLEMENTED | Separate immutable idea/snapshot, MODEL/ACTUAL, append-only events and explicit Telegram confirmation |
+| 19–20 | IMPLEMENTED | Entry/no-chase/reassessment and path-to-target services |
+| 21 | IMPLEMENTED / CONFIGURATION REQUIRED | Gross/net cost model; no assumed broker costs |
+| 22 | PARTIAL / CONFIGURATION REQUIRED | Persistent versioned policy exists; dedicated Telegram administrator risk-policy wizard remains missing |
+| 23 | IMPLEMENTED | Stress loss, heat/factor caps and fail-closed correlation behavior |
+| 24 | PARTIAL / BLOCKED BY DATA SOURCE | Scenario caps implemented; full depth-dependent cap unavailable on public quantity-less level-1 |
+| 25–26 | IMPLEMENTED / CONFIGURATION REQUIRED | Min-cap sizing and calibrated/cold-start opportunity ranking; missing inputs do not produce numbers |
+| 27–35 | IMPLEMENTED | Admission, Wilson/Brier/ECE, cold start, MODEL/ACTUAL and rolling/setup/regime/degradation statistics |
+| 36–39 | PARTIAL | Advisory manager, priorities, stop/runner/time checkpoints and manual events exist; live current-mark orchestration/overnight provider is not registered |
+| 40 | IMPLEMENTED | Every re-entry allocates a new concurrent-safe trade ID |
+| 41 | IMPLEMENTED / CONFIGURATION REQUIRED | Engine enforces configured guards; no user policy means no full pass |
+| 42–45 | IMPLEMENTED | Persistent fail-closed kill switch, adversarial check, all-mandatory audit and exclusive classification |
+| 46 | PARTIAL | Existing Gemini provider is safe and bounded; V2.4 verified-snapshot adapter awaits the live orchestrator |
+| 47–51 | IMPLEMENTED | Compact/full cards, actual card, persistent updates, immutable daily report and idempotent after-11 market outbox |
+| 52–56 | IMPLEMENTED / CONFIGURATION REQUIRED | Transactional journal health, additive migrations, structured status/metrics and explicit optional settings |
+| 57–58 | IMPLEMENTED | Numbered unit/integration/migration coverage and recorded final commands |
+| 59 | IMPLEMENTED | Requested V2.4 documents and deployment runbook |
+| 60–61 | IMPLEMENTED | Missing provider facts remain unavailable; migrations/backups are non-destructive |
+| 62 | NOT COMPLETE FOR LIVE V2.4 | Persistence and gates are ready, but production publication stays disabled until the orchestrator/provider/config gaps close |
+| 63–64 | IMPLEMENTED | Atomic phase commits and final evidence report |
+
+### Final conclusion
+
+The reusable V2.4 journal, safety, analysis, execution, statistics, audit,
+Telegram presentation and observability layers are implemented without changing
+legacy strategy behavior. This is not claimed as an enabled production trading
+signal path: `INTRADAY_V24_ENABLED=false` remains the safe deployment default.
+The two implementable integration gaps are the end-to-end scan-to-journal/live
+position orchestrator and a dedicated administrator workflow for versioned risk
+policy. Provider-dependent gaps remain full L2, borrow, real-time news,
+corporate actions, some cross-asset data and actual broker costs/fills.

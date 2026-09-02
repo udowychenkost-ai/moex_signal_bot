@@ -65,9 +65,8 @@ the app container cannot begin normal work against an old schema. PostgreSQL and
 the app both have healthchecks and `restart: unless-stopped`. Database data lives
 in the named `moex_postgres` volume.
 
-Revisions `20260824_0010`, `20260824_0011`, `20260824_0012` and
-`20260827_0013` only add
-columns/tables and
+Revisions through `20260827_0013` and the V2.4 chain
+`20260901_0014`–`20260901_0020` only add columns/tables and
 preserve every existing V1/V2 `TradingIdea` and experiment row. Existing V1
 rows remain labeled `strategy_version=v1`; V2 forward statistics use
 `v2_ai_quality_filter` and do not mix the baseline. Revision `0011` adds only
@@ -77,6 +76,14 @@ clears nor rewrites existing users, ideas, experiments or notification outbox.
 Revision `0013` only makes `order_book_levels.quantity` nullable: public ISS
 publishes delayed best bid/offer but can omit depth, which must not be replaced
 with a fabricated zero quantity.
+
+V2.4 revisions add immutable decision/context/daily-summary records, separate
+MODEL/ACTUAL journals, append-only events and policies, persistent kill-switch
+history, journal health and an idempotent notification outbox. They do not
+backfill or rewrite legacy decisions. Production must keep
+`INTRADAY_V24_ENABLED=false`: the safety services are present, but the final
+live scan-to-journal orchestrator and Telegram administrator risk-policy wizard
+are explicitly not registered yet.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -113,11 +120,11 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the V2.1.5.1 update, back up PostgreSQL as described below
+Before the 0.6.0 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
-cp .env ".env.pre-v2.1-$(date -u +%Y%m%dT%H%M%SZ)"
+cp .env ".env.pre-v2.4-$(date -u +%Y%m%dT%H%M%SZ)"
 nano .env
 ```
 
@@ -132,7 +139,15 @@ AI_FALLBACK_MODEL=gemini-flash-lite-latest
 AI_MAX_OUTPUT_TOKENS=4096
 AI_FILTER_ENABLED=true
 AI_ALLOW_UNREVIEWED_FALLBACK=false
+INTRADAY_V24_ENABLED=false
+INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
+INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
+INTRADAY_V24_LEVERAGE_ENABLED=false
 ```
+
+Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. The 0.6.0 V2.4
+foundation is fail-closed and auditable, but the final live candidate
+orchestrator and administrator risk-policy wizard remain explicit gaps.
 
 Then update without deleting the database volume:
 
@@ -140,9 +155,14 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.5.6/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.6.0/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
+if grep -q '^INTRADAY_V24_ENABLED=' .env; then
+  sed -i 's/^INTRADAY_V24_ENABLED=.*/INTRADAY_V24_ENABLED=false/' .env
+else
+  printf '%s\n' 'INTRADAY_V24_ENABLED=false' >> .env
+fi
 if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
   sed -i 's/^AI_MAX_OUTPUT_TOKENS=.*/AI_MAX_OUTPUT_TOKENS=4096/' .env
 else
@@ -173,10 +193,23 @@ docker compose exec app python -m app healthcheck
 docker compose exec app python -m app gemini-health
 docker compose exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
+docker compose exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off' <<'SQL'
+SELECT version_num FROM alembic_version;
+SELECT 'idea_journals', COUNT(*) FROM idea_journals
+UNION ALL SELECT 'model_trade_journals', COUNT(*) FROM model_trade_journals
+UNION ALL SELECT 'actual_trade_journals', COUNT(*) FROM actual_trade_journals
+UNION ALL SELECT 'trade_event_journal', COUNT(*) FROM trade_event_journal;
+SQL
 ```
 
-The expected Alembic revision is `20260827_0013`. Do not run `docker compose
+The expected Alembic revision is `20260901_0020`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
+
+After the app starts, `/status` must show Alembic `20260901_0020`, journal
+`AVAILABLE`, V2.4 mode `DISABLED`, and the actual Data SLA/risk/calibration/kill
+states. `NOT_CONFIGURED` is expected for policies not yet approved and must not
+be “fixed” with invented limits.
 
 V2.1.5.1 adds the independent `order_book_ingestion` job. Public ISS provides a
 delayed official best bid/offer feed but not guaranteed depth; the bot stores

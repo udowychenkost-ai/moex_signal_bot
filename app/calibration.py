@@ -131,11 +131,7 @@ def wilson_interval(successes: int, total: int, *, z: float = 1.959963984540054)
     estimate = successes / total
     denominator = 1 + z**2 / total
     centre = (estimate + z**2 / (2 * total)) / denominator
-    margin = (
-        z
-        * math.sqrt(estimate * (1 - estimate) / total + z**2 / (4 * total**2))
-        / denominator
-    )
+    margin = z * math.sqrt(estimate * (1 - estimate) / total + z**2 / (4 * total**2)) / denominator
     lower = max(0.0, centre - margin)
     upper = min(1.0, centre + margin)
     return WilsonInterval(estimate, lower, upper, upper - lower)
@@ -255,9 +251,7 @@ class CalibrationService:
 
         observations = [self._observation(model, idea) for model, idea in rows]
         oos = [item for item in observations if item.sample_type == SampleType.OOS.value]
-        forward = [
-            item for item in observations if item.sample_type == SampleType.FORWARD.value
-        ]
+        forward = [item for item in observations if item.sample_type == SampleType.FORWARD.value]
         successes = sum(item.tp_before_sl or 0 for item in observations)
         interval = wilson_interval(successes, len(observations)) if observations else None
         degradation = self.degradation.assess(
@@ -286,9 +280,7 @@ class CalibrationService:
         if degradation.status is not DegradationStatus.STABLE:
             reasons.append(f"DEGRADATION_{degradation.status.value}")
         admission = (
-            StatisticalAdmissionStatus.PASS
-            if not reasons
-            else StatisticalAdmissionStatus.FAIL
+            StatisticalAdmissionStatus.PASS if not reasons else StatisticalAdmissionStatus.FAIL
         )
         if interval is not None and interval.lower < CALIBRATION_TARGET_LOWER_BOUND:
             reasons.append("WILSON_LOWER_BOUND_BELOW_70_PERCENT")

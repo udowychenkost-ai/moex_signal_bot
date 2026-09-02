@@ -217,9 +217,7 @@ class ActualTradeService:
             if idea is None:
                 raise ActualTradeNotFound("Торговая идея v2.4 не найдена")
             model = await session.scalar(
-                select(ModelTradeJournal).where(
-                    ModelTradeJournal.trade_id == confirmation.trade_id
-                )
+                select(ModelTradeJournal).where(ModelTradeJournal.trade_id == confirmation.trade_id)
             )
             model_entry = model.model_entry if model is not None else None
             position_rub = rub if rub is not None else shares * entry_price
@@ -344,10 +342,14 @@ class ActualTradeService:
                 raise ActualTradeClosed("Позиция уже закрыта или отменена")
 
             event_type, reason = self._event_mapping(confirmation.action)
-            if confirmation.action in {
-                ActualTradeAction.MOVE_STOP,
-                ActualTradeAction.LOCK_PROFIT,
-            } and stop_after is None:
+            if (
+                confirmation.action
+                in {
+                    ActualTradeAction.MOVE_STOP,
+                    ActualTradeAction.LOCK_PROFIT,
+                }
+                and stop_after is None
+            ):
                 raise ActualTradeError("Для изменения стопа нужна новая фактическая цена стопа")
             if confirmation.action is ActualTradeAction.BREAK_EVEN:
                 stop_after = actual.actual_entry

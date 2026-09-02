@@ -103,8 +103,7 @@ def upgrade() -> None:
         sa.CheckConstraint("min_oos_trades > 0", name="ck_stat_admission_min_oos"),
         sa.CheckConstraint("min_forward_trades > 0", name="ck_stat_admission_min_forward"),
         sa.CheckConstraint(
-            "max_confidence_interval_width > 0 "
-            "AND max_confidence_interval_width <= 1",
+            "max_confidence_interval_width > 0 AND max_confidence_interval_width <= 1",
             name="ck_stat_admission_ci_width",
         ),
         sa.PrimaryKeyConstraint("id"),

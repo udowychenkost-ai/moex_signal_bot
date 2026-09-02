@@ -270,7 +270,7 @@ def test_gemini_is_the_default_provider() -> None:
     assert settings.ai_model == "gemini-3.6-flash"
     assert settings.ai_fallback_model == "gemini-flash-lite-latest"
     assert settings.ai_max_output_tokens == 4_096
-    assert settings.app_version == "0.5.6"
+    assert settings.app_version == "0.6.0"
 
 
 @pytest.mark.asyncio

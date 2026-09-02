@@ -300,9 +300,7 @@ async def test_model_and_actual_statistics_are_separate_with_explicit_costs() ->
             )
         )
         service = V24StatisticsService(factory)
-        separated = await service.separate_global_statistics(
-            strategy_version="intraday_v2_4"
-        )
+        separated = await service.separate_global_statistics(strategy_version="intraday_v2_4")
         assert separated["MODEL"].n_trades == 1
         assert separated["MODEL"].net_pl_rub == 190.0
         assert separated["ACTUAL"].n_trades == 1
@@ -331,6 +329,4 @@ def test_statistical_admission_migration_is_append_only(tmp_path: Path) -> None:
         )
         connection.commit()
         with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                "UPDATE statistical_admission_settings SET min_oos_trades = 1"
-            )
+            connection.execute("UPDATE statistical_admission_settings SET min_oos_trades = 1")

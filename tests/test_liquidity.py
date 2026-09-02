@@ -369,9 +369,9 @@ async def test_db_first_service_reuses_existing_data_without_lifecycle_writes() 
     async with factory() as session:
         idea = await session.get(TradingIdea, idea_id)
         before_events = await session.scalar(
-            select(func.count()).select_from(TradingIdeaEvent).where(
-                TradingIdeaEvent.idea_id == idea_id
-            )
+            select(func.count())
+            .select_from(TradingIdeaEvent)
+            .where(TradingIdeaEvent.idea_id == idea_id)
         )
         assert idea is not None
         before_status = idea.status
@@ -383,9 +383,9 @@ async def test_db_first_service_reuses_existing_data_without_lifecycle_writes() 
     async with factory() as session:
         unchanged = await session.get(TradingIdea, idea_id)
         after_events = await session.scalar(
-            select(func.count()).select_from(TradingIdeaEvent).where(
-                TradingIdeaEvent.idea_id == idea_id
-            )
+            select(func.count())
+            .select_from(TradingIdeaEvent)
+            .where(TradingIdeaEvent.idea_id == idea_id)
         )
     assert assessment.adv20 == pytest.approx(2_000_000_000)
     assert assessment.book_fresh

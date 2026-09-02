@@ -1,5 +1,10 @@
 # Архитектура MOEX Signal Bot
 
+Основная схема ниже описывает рабочий legacy/V2 LIVE OBSERVATION pipeline.
+Изолированная V2.4 safety-архитектура, её журнал и причины, по которым она
+остаётся выключенной, описаны отдельно в
+[`INTRADAY_V2_4_ARCHITECTURE.md`](INTRADAY_V2_4_ARCHITECTURE.md).
+
 ## Поток данных
 
 ```text

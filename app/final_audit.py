@@ -51,8 +51,7 @@ class FinalAuditService:
                 reasons.append(f"{gate.value}:NOT_REQUIRED_NOT_ALLOWED")
 
         ordered = {
-            gate.value: normalized.get(gate, AuditGateResult.FAIL).value
-            for gate in AuditGate
+            gate.value: normalized.get(gate, AuditGateResult.FAIL).value for gate in AuditGate
         }
         return AuditAssessment(
             status=AuditStatus.FAIL if failed else AuditStatus.PASS,

@@ -71,15 +71,9 @@ class AdversarialCheck:
         ai_reasons: tuple[str, ...] = (),
     ) -> AdversarialAssessment:
         values = {field.name: getattr(inputs, field.name) for field in fields(inputs)}
-        hard_fail = tuple(
-            sorted(name.upper() for name in HARD_FAIL_FIELDS if values[name] is True)
-        )
+        hard_fail = tuple(sorted(name.upper() for name in HARD_FAIL_FIELDS if values[name] is True))
         wait = [name.upper() for name in WAIT_FIELDS if values[name] is True]
-        wait.extend(
-            f"{name.upper()}_UNKNOWN"
-            for name, value in values.items()
-            if value is None
-        )
+        wait.extend(f"{name.upper()}_UNKNOWN" for name, value in values.items() if value is None)
         if hard_fail:
             result = AdversarialResult.FAIL
         elif ai_result is AdversarialResult.FAIL:

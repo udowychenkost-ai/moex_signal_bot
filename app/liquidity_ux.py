@@ -50,9 +50,7 @@ def format_liquidity_compact(assessment: LiquidityAssessment | None) -> str:
             "Комфортный размер по ликвидности: нет данных"
         )
     turnover = (
-        assessment.turnover_today
-        if assessment.market_open
-        else assessment.last_daily_turnover
+        assessment.turnover_today if assessment.market_open else assessment.last_daily_turnover
     )
     turnover_label = "Оборот сегодня" if assessment.market_open else "Последний оборот"
     return (
@@ -131,9 +129,7 @@ def format_liquidity_details(assessment: LiquidityAssessment) -> str:
     lines.append("Стакан:")
     if assessment.book_fresh:
         for depth in assessment.depths:
-            lines.append(
-                f"±{depth.band * 100:.2f}% — <b>{format_rubles(depth.relevant_depth)}</b>"
-            )
+            lines.append(f"±{depth.band * 100:.2f}% — <b>{format_rubles(depth.relevant_depth)}</b>")
     else:
         lines.append("<b>недоступен / устарел</b>")
         if assessment.market_open and assessment.book_snapshot_at is not None:

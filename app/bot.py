@@ -845,8 +845,7 @@ def create_router(services: BotServices) -> Router:
         await state.update_data(actual_trade_id=idea.trade_id)
         await state.set_state(ActualEntryStates.price)
         await callback.message.answer(
-            f"Фактический вход для <b>{escape(idea.ticker)}</b>.\n"
-            "Введите исполненную цену:",
+            f"Фактический вход для <b>{escape(idea.ticker)}</b>.\nВведите исполненную цену:",
             reply_markup=ForceReply(selective=True, input_field_placeholder="268,45"),
         )
         await callback.answer("Начато ручное подтверждение")
@@ -1144,8 +1143,7 @@ def create_router(services: BotServices) -> Router:
             return
         await state.clear()
         await message.answer(
-            "✅ Частичное действие подтверждено и записано.\n\n"
-            + format_actual_position(position),
+            "✅ Частичное действие подтверждено и записано.\n\n" + format_actual_position(position),
             reply_markup=v24_actual_position_keyboard(position.actual_trade_id),
         )
 
@@ -1867,9 +1865,7 @@ def create_router(services: BotServices) -> Router:
         if history is None:
             await callback.answer("Идея больше не существует", show_alert=True)
             return
-        liquidity = (
-            await idea_liquidity(history.idea) if action == "instrument_idea" else None
-        )
+        liquidity = await idea_liquidity(history.idea) if action == "instrument_idea" else None
         formatters = {
             "instrument_idea": lambda: format_new_idea(
                 history.idea,

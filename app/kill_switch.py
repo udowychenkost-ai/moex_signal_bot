@@ -74,9 +74,7 @@ class KillSwitchService:
             raise ValueError("Kill switch timestamp must be timezone-aware")
         ordered_reasons = tuple(sorted(reasons, key=lambda item: item.value))
         desired_state = (
-            KillSwitchState.CAPITAL_PRESERVATION
-            if ordered_reasons
-            else KillSwitchState.NORMAL
+            KillSwitchState.CAPITAL_PRESERVATION if ordered_reasons else KillSwitchState.NORMAL
         )
         current = await self.current()
         if (

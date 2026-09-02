@@ -4,6 +4,29 @@
 
 ### Added
 
+- V2.4/0.6.0 adds the isolated `intraday_v2_4` safety foundation without
+  changing legacy strategy rules or history: concurrent trade IDs, immutable
+  idea/decision/context records, separate MODEL and explicitly user-confirmed
+  ACTUAL journals, and append-only trade events.
+- Added fail-closed Data Integrity, action-specific Data SLA, microstructure,
+  cost, liquidity, stress-risk, portfolio/factor caps, opportunity ranking,
+  calibration/admission, degradation, adversarial review, all-mandatory final
+  audit and exclusive classification services.
+- Added deterministic 1d/1h/15m/5m intraday technical/setup/regime analysis,
+  optional quality-gated 1m execution, entry/no-chase/path-to-target assessment,
+  conservative model fills and gap-through-stop handling.
+- Added Telegram manual actual-entry/action flows, V2.4 compact/full idea and
+  active-position cards, advisory stop/partial/runner/time checkpoints,
+  immutable daily journal summaries, after-11 market summary deduplication and
+  structured `/status` observability.
+- Added non-destructive Alembic revisions `20260901_0014`–`20260901_0020` and
+  migration tests preserving previous-head data and database-level immutability.
+- `INTRADAY_V24_ENABLED=false` remains mandatory for deployment because the
+  final live scan-to-journal/current-position orchestrator and dedicated
+  Telegram risk-policy administrator wizard are not registered. Provider gaps
+  (full L2, borrow, real-time news/events and some cross-asset facts) remain
+  explicit `DATA_NOT_AVAILABLE` rather than fabricated values.
+
 - V2.1.5.1 implements real MOEX order-book ingestion in the existing runtime:
   an independent two-minute scheduler job, bounded subscribed-depth requests,
   a filtered public ISS level-1 batch fallback, transactional latest-snapshot

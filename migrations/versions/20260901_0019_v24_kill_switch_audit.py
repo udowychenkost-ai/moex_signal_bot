@@ -49,9 +49,7 @@ def _create_immutability_guard() -> None:
 def _drop_immutability_guard() -> None:
     dialect = op.get_bind().dialect.name
     if dialect == "postgresql":
-        op.execute(
-            "DROP TRIGGER IF EXISTS trg_kill_switch_events_immutable ON kill_switch_events"
-        )
+        op.execute("DROP TRIGGER IF EXISTS trg_kill_switch_events_immutable ON kill_switch_events")
     elif dialect == "sqlite":
         op.execute("DROP TRIGGER IF EXISTS trg_kill_switch_events_no_update")
         op.execute("DROP TRIGGER IF EXISTS trg_kill_switch_events_no_delete")

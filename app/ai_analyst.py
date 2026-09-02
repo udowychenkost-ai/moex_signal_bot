@@ -149,8 +149,7 @@ def _language_mismatch_fields(analysis: BaseModel) -> tuple[str, ...]:
             ]
         )
         values.extend(
-            (f"key_risks[{index}]", value)
-            for index, value in enumerate(analysis.key_risks)
+            (f"key_risks[{index}]", value) for index, value in enumerate(analysis.key_risks)
         )
         values.extend(
             (f"invalidation_conditions[{index}]", value)
@@ -608,9 +607,7 @@ class AIAnalystService:
         )
         if should_fallback and self.fallback_provider is not None:
             fallback_prompt = (
-                f"{system_prompt}\n\n{retry_suffix}"
-                if primary_validation_error
-                else system_prompt
+                f"{system_prompt}\n\n{retry_suffix}" if primary_validation_error else system_prompt
             )
             analysis, fallback, fallback_attempt = await self._call_and_validate(
                 provider=self.fallback_provider,

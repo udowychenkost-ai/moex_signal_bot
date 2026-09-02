@@ -46,9 +46,7 @@ class V24JournalRecoveryService:
         async with self.session_factory() as session:
             rows = list(
                 await session.scalars(
-                    select(ModelTradeJournal).where(
-                        ModelTradeJournal.final_exit_time.is_(None)
-                    )
+                    select(ModelTradeJournal).where(ModelTradeJournal.final_exit_time.is_(None))
                 )
             )
         return {

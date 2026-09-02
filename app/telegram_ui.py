@@ -60,11 +60,7 @@ def idea_context_keyboard(
             InlineKeyboardButton(text="📊 Теханализ", callback_data=f"idea_tech:{idea.id}"),
             InlineKeyboardButton(text="🌍 Рынок", callback_data=f"idea_market:{idea.id}"),
         ],
-        [
-            InlineKeyboardButton(
-                text="💧 Ликвидность", callback_data=f"idea_liquidity:{idea.id}"
-            )
-        ],
+        [InlineKeyboardButton(text="💧 Ликвидность", callback_data=f"idea_liquidity:{idea.id}")],
         [
             InlineKeyboardButton(
                 text="🔄 Что изменилось?",
@@ -94,9 +90,7 @@ def liquidity_context_keyboard(idea_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="⬅️ Назад к идее", callback_data=f"idea:{idea_id}"
-                ),
+                InlineKeyboardButton(text="⬅️ Назад к идее", callback_data=f"idea:{idea_id}"),
                 InlineKeyboardButton(text="🏠 Главное меню", callback_data="home"),
             ]
         ]

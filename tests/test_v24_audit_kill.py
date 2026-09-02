@@ -49,9 +49,7 @@ def migration_config(database_url: str) -> Config:
 
 
 def all_adversarial_inputs(value: bool | None = False) -> AdversarialInputs:
-    return AdversarialInputs(
-        **{field.name: value for field in fields(AdversarialInputs)}
-    )
+    return AdversarialInputs(**{field.name: value for field in fields(AdversarialInputs)})
 
 
 def audit_pass(*, calibration_required: bool = False):
@@ -116,9 +114,7 @@ async def test_kill_switch_is_fail_closed_persistent_and_transition_only() -> No
         async with factory() as session:
             rows = list(
                 (
-                    await session.execute(
-                        select(KillSwitchEvent).order_by(KillSwitchEvent.id)
-                    )
+                    await session.execute(select(KillSwitchEvent).order_by(KillSwitchEvent.id))
                 ).scalars()
             )
         assert [row.state for row in rows] == [
@@ -209,10 +205,7 @@ def test_final_classification_is_exclusive_and_cannot_hide_audit_failure() -> No
             setup_strong=True,
         )
     )
-    assert (
-        statistically_qualified.classification
-        is V24Classification.STATISTICALLY_QUALIFIED_70
-    )
+    assert statistically_qualified.classification is V24Classification.STATISTICALLY_QUALIFIED_70
 
     production = classifier.classify(
         ClassificationInputs(

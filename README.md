@@ -60,6 +60,41 @@
 sector peer coverage недостаточен, fundamental factor честно помечается «нет
 данных», исключается из суммы, а доступные веса перенормируются.
 
+## INTRADAY V2.4 safety layer
+
+Version `0.6.0` adds an isolated `intraday_v2_4` foundation: immutable
+decision journal, separate MODEL/ACTUAL records, explicit Telegram confirmation,
+append-only events, Data SLA/microstructure/risk/liquidity gates, MTF setup and
+execution assessments, calibration/statistics, kill switch, final audit,
+V2.4 cards, daily reports and structured `/status` diagnostics. Alembic head is
+`20260901_0020`.
+
+The safe deployment default is:
+
+```env
+INTRADAY_V24_ENABLED=false
+INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
+INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
+INTRADAY_V24_LEVERAGE_ENABLED=false
+```
+
+This is not yet an enabled live V2.4 publication path. The scheduled V2.4 job
+recovers journal state and ingests its MTF data, but the final live
+scan-to-audit-to-journal orchestrator and the administrator risk-policy wizard
+are not registered. Keep the flag disabled until those gaps and the required
+data/configuration prerequisites in the gap analysis are closed. The existing
+V1/V2 LIVE OBSERVATION workflow remains unchanged.
+
+V2.4 documentation:
+
+- [`docs/MASTER_PROMPT_V2_4_GAP_ANALYSIS.md`](docs/MASTER_PROMPT_V2_4_GAP_ANALYSIS.md)
+- [`docs/INTRADAY_V2_4_ARCHITECTURE.md`](docs/INTRADAY_V2_4_ARCHITECTURE.md)
+- [`docs/JOURNAL_SCHEMA.md`](docs/JOURNAL_SCHEMA.md)
+- [`docs/DATA_SLA.md`](docs/DATA_SLA.md)
+- [`docs/RISK_BUDGET.md`](docs/RISK_BUDGET.md)
+- [`docs/CALIBRATION.md`](docs/CALIBRATION.md)
+- [`docs/FINAL_AUDIT.md`](docs/FINAL_AUDIT.md)
+
 ## Архитектура
 
 ```text

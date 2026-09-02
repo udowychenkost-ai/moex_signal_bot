@@ -157,9 +157,7 @@ async def test_confirmed_entry_is_idempotent_separate_and_auditable() -> None:
             events = list(
                 (
                     await session.execute(
-                        select(TradeEventJournal).where(
-                            TradeEventJournal.trade_id == trade_id
-                        )
+                        select(TradeEventJournal).where(TradeEventJournal.trade_id == trade_id)
                     )
                 ).scalars()
             )
@@ -304,9 +302,9 @@ def test_actual_trade_keyboards_expose_only_manual_journal_actions() -> None:
         if button.callback_data
     ]
     assert all(len(value.encode()) <= 64 for value in callbacks)
-    assert {
-        f"actual_action:{action.value}:A-{trade_id}" for action in ActualTradeAction
-    }.issubset(callbacks)
+    assert {f"actual_action:{action.value}:A-{trade_id}" for action in ActualTradeAction}.issubset(
+        callbacks
+    )
 
 
 @pytest.mark.asyncio

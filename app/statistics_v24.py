@@ -195,8 +195,7 @@ def reliability_metrics(
             )
         )
     ece = sum(
-        bucket.count / len(eligible)
-        * abs(bucket.average_probability - bucket.observed_rate)
+        bucket.count / len(eligible) * abs(bucket.average_probability - bucket.observed_rate)
         for bucket in buckets
     )
     return fmean(value[2] for value in eligible), ece, tuple(buckets)
@@ -233,12 +232,8 @@ def calculate_performance(observations: list[TradeObservation]) -> PerformanceMe
         net_pl_rub=sum(net_values) if complete_net else None,
         max_drawdown_rub=_drawdown(net_values) if complete_net else None,
         max_drawdown_r=_drawdown(r_values) if complete_r else None,
-        average_mfe_pct=_average(
-            [item.mfe_pct for item in ordered if item.mfe_pct is not None]
-        ),
-        average_mae_pct=_average(
-            [item.mae_pct for item in ordered if item.mae_pct is not None]
-        ),
+        average_mfe_pct=_average([item.mfe_pct for item in ordered if item.mfe_pct is not None]),
+        average_mae_pct=_average([item.mae_pct for item in ordered if item.mae_pct is not None]),
         capture_ratio=_average(
             [item.capture_ratio for item in ordered if item.capture_ratio is not None]
         ),
@@ -249,11 +244,7 @@ def calculate_performance(observations: list[TradeObservation]) -> PerformanceMe
         ece=ece,
         reliability_buckets=buckets,
         average_execution_quality=_average(
-            [
-                item.execution_quality
-                for item in ordered
-                if item.execution_quality is not None
-            ]
+            [item.execution_quality for item in ordered if item.execution_quality is not None]
         ),
     )
 
@@ -291,9 +282,7 @@ def setup_statistics(
         else:
             status = SetupLifecycleStatus.ACTIVE
         false_breakouts = [
-            int(item.false_breakout)
-            for item in values
-            if item.false_breakout is not None
+            int(item.false_breakout) for item in values if item.false_breakout is not None
         ]
         result.append(
             SetupStatistics(
@@ -332,9 +321,7 @@ def regime_statistics(
     result: list[RegimeStatistics] = []
     for key, values in sorted(grouped.items()):
         complete_key = "UNKNOWN" not in key
-        available = (
-            complete_key and minimum_sample is not None and len(values) >= minimum_sample
-        )
+        available = complete_key and minimum_sample is not None and len(values) >= minimum_sample
         result.append(
             RegimeStatistics(
                 key=key,
@@ -420,11 +407,7 @@ class ModelDegradationDetector:
         if win_rate_drop >= float(policy.win_rate_drop):
             reasons.append("WIN_RATE_DROP")
         return DegradationAssessment(
-            (
-                DegradationStatus.MODEL_CONFIDENCE_REDUCED
-                if reasons
-                else DegradationStatus.STABLE
-            ),
+            (DegradationStatus.MODEL_CONFIDENCE_REDUCED if reasons else DegradationStatus.STABLE),
             len(recent),
             len(history),
             recent_metrics.expectancy_r,
@@ -441,9 +424,7 @@ def compare_model_actual_execution(
 ) -> ExecutionComparison:
     model_by_trade = {item.trade_id: item for item in model}
     pairs = [
-        (model_by_trade[item.trade_id], item)
-        for item in actual
-        if item.trade_id in model_by_trade
+        (model_by_trade[item.trade_id], item) for item in actual if item.trade_id in model_by_trade
     ]
     entry_slippage: list[float] = []
     exit_slippage: list[float] = []
@@ -608,8 +589,7 @@ class V24StatisticsService:
                     direction=(model.calibration_direction if model else None) or idea.direction,
                     setup=(model.calibration_setup if model else None) or idea.setup,
                     market_regime=(
-                        (model.calibration_market_regime if model else None)
-                        or idea.market_regime
+                        (model.calibration_market_regime if model else None) or idea.market_regime
                     ),
                     trend=model.calibration_trend if model else None,
                     volatility=model.calibration_volatility if model else None,

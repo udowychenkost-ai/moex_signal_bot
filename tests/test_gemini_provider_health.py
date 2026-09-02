@@ -278,9 +278,7 @@ async def test_invalid_structured_json_remains_provider_success_but_analysis_fai
     assert review.analysis.verdict == "WAIT"
     assert review.request_count == 3
     assert review.fallback_used
-    assert all(
-        attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts
-    )
+    assert all(attempt.error_code == "INVALID_STRUCTURED_RESPONSE" for attempt in review.attempts)
     assert calls == 3
 
 
@@ -441,7 +439,7 @@ async def test_health_reported_primary_unavailable_skips_primary_generate_and_us
                         {
                             "name": "models/gemini-flash-lite-latest",
                             "supportedGenerationMethods": ["generateContent"],
-                        }
+                        },
                     ]
                 },
             )
