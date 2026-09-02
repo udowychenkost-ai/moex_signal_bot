@@ -30,8 +30,9 @@ One idea receives exactly one classification. In cold start no probability or
 
 ## Operational caveat
 
-The audit/classification services and immutable evidence format are implemented
-and tested. They are not yet connected to a live V2.4 scan-to-journal
-orchestrator, so production V2.4 publication remains disabled. This avoids a
-path that could appear fully audited while omitting a gate invocation.
-
+The audit/classification services are connected through
+`IntradayV24Orchestrator`. Immediately before persistence/publication the
+orchestrator recomputes Final Audit from the deterministic gate map, so a forged
+or stale AI verdict cannot bypass a hard failure. Production publication still
+remains disabled because current providers and unapproved policy values cannot
+produce an honest all-gates PASS.

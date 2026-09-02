@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain import StrategyFamily
 from app.models import (
     ActualTradeJournal,
     DecisionSnapshotV24,
@@ -20,6 +21,7 @@ from app.models import (
     ModelTradeJournal,
     TradeEventJournal,
     TradeIdSequence,
+    V24CandidateClaim,
 )
 from app.v24_domain import (
     STRATEGY_VERSION_V24,
@@ -161,6 +163,12 @@ async def create_idea_journal(
     ticker: str,
     direction: str | JournalDirection,
     strategy_version: str = STRATEGY_VERSION_V24,
+    strategy_family: StrategyFamily | str = StrategyFamily.INTRADAY_V24,
+    candidate_key: str | None = None,
+    risk_policy_version: str | None = None,
+    data_sla_policy_version: str | None = None,
+    cost_model_version: str | None = None,
+    calibration_model_version: str | None = None,
     journal_values: Mapping[str, Any] | None = None,
     snapshot_values: Mapping[str, Any] | None = None,
 ) -> tuple[IdeaJournal, DecisionSnapshotV24]:
@@ -177,11 +185,21 @@ async def create_idea_journal(
     )
     journal_extra = _without_reserved(
         journal_values or {},
-        {"trade_id", "strategy_version", "signal_datetime", "ticker", "direction"},
+        {
+            "trade_id",
+            "candidate_key",
+            "strategy_family",
+            "strategy_version",
+            "signal_datetime",
+            "ticker",
+            "direction",
+        },
     )
     journal_extra = _prepare_values(journal_extra, IDEA_JSON_FIELDS)
     idea = IdeaJournal(
         trade_id=trade_id,
+        candidate_key=candidate_key,
+        strategy_family=StrategyFamily(str(_enum_value(strategy_family))).value,
         strategy_version=strategy_version,
         signal_datetime=normalized_time,
         ticker=normalized_ticker,
@@ -191,7 +209,18 @@ async def create_idea_journal(
 
     supplied_snapshot = _without_reserved(
         snapshot_values or {},
-        {"trade_id", "strategy_version", "signal_datetime", "ticker", "direction"},
+        {
+            "trade_id",
+            "strategy_family",
+            "strategy_version",
+            "risk_policy_version",
+            "data_sla_policy_version",
+            "cost_model_version",
+            "calibration_model_version",
+            "signal_datetime",
+            "ticker",
+            "direction",
+        },
     )
     inherited_snapshot: dict[str, Any] = {
         "price_as_of": journal_extra.get("price_as_of"),
@@ -228,7 +257,12 @@ async def create_idea_journal(
     await session.flush()
     snapshot = DecisionSnapshotV24(
         trade_id=trade_id,
+        strategy_family=StrategyFamily(str(_enum_value(strategy_family))).value,
         strategy_version=strategy_version,
+        risk_policy_version=risk_policy_version,
+        data_sla_policy_version=data_sla_policy_version,
+        cost_model_version=cost_model_version,
+        calibration_model_version=calibration_model_version,
         signal_datetime=normalized_time,
         ticker=normalized_ticker,
         direction=normalized_direction.value,
@@ -237,6 +271,59 @@ async def create_idea_journal(
     session.add(snapshot)
     await session.flush()
     return idea, snapshot
+
+
+async def claim_v24_candidate(
+    session: AsyncSession,
+    *,
+    candidate_key: str,
+    strategy_version: str,
+    ticker: str,
+    direction: str | JournalDirection,
+    source_time: datetime,
+) -> bool:
+    """Claim a candidate in the caller transaction; duplicate keys are a safe no-op."""
+
+    key = candidate_key.strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", key):
+        raise ValueError("candidate_key must be a lowercase SHA-256 hex digest")
+    values = {
+        "candidate_key": key,
+        "strategy_version": strategy_version,
+        "ticker": normalize_ticker(ticker),
+        "direction": normalize_direction(direction).value,
+        "source_time": _normalize_signal_time(source_time),
+    }
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        statement = postgresql_insert(V24CandidateClaim).values(**values)
+    elif dialect == "sqlite":
+        statement = sqlite_insert(V24CandidateClaim).values(**values)
+    else:
+        if await session.get(V24CandidateClaim, key) is not None:
+            return False
+        session.add(V24CandidateClaim(**values))
+        await session.flush()
+        return True
+    result = await session.execute(
+        statement.on_conflict_do_nothing(index_elements=["candidate_key"])
+    )
+    return bool(result.rowcount)
+
+
+async def bind_v24_candidate_claim(
+    session: AsyncSession,
+    *,
+    candidate_key: str,
+    trade_id: str,
+) -> None:
+    claim = await session.get(V24CandidateClaim, candidate_key)
+    if claim is None:
+        raise ValueError("Candidate must be claimed before journal creation")
+    if claim.trade_id is not None and claim.trade_id != trade_id:
+        raise ValueError("Candidate claim is already bound to another trade")
+    claim.trade_id = trade_id
+    await session.flush()
 
 
 async def create_model_trade(

@@ -241,7 +241,7 @@ class _Health:
             available=self.available,
             writable=self.available,
             migration_current=self.available,
-            revision="20260901_0020" if self.available else None,
+            revision="20260902_0021" if self.available else None,
             missing_tables=() if self.available else ("idea_journals",),
             checked_at=NOW,
         )
@@ -318,7 +318,9 @@ async def test_v24_observability_uses_real_persistence_and_no_fake_configuration
                     "probability_status": "NOT_RELIABLY_CALIBRATED",
                     "audit_status": "FAIL",
                 },
-                snapshot_values={"gate_results": {"DATA_SLA": "FAIL", "DATA": "PASS"}},
+                snapshot_values={
+                    "gate_results": {"final_audit": {"gates": {"DATA_SLA": "FAIL", "DATA": "PASS"}}}
+                },
             )
         status = await V24ObservabilityService(Settings(_env_file=None), factory).status(now=NOW)
         assert not status.enabled

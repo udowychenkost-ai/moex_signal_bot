@@ -82,6 +82,8 @@ class ScheduledJobs:
         return await self._run("order_book_ingestion", self.orderbooks.sync_all)
 
     async def scan_market(self) -> dict[str, Any]:
+        if not self.settings.enable_legacy_strategy:
+            return {"enabled": False, "status": "DISABLED", "errors": 0}
         result = await self._run("idea_scanning", self.scanner.scan_ideas)
         logger.info(
             "scan completed checked=%s candidates=%s pass=%s weak=%s reject=%s "
@@ -184,7 +186,7 @@ def build_scheduler(settings: Settings, jobs: ScheduledJobs) -> AsyncIOScheduler
         next_run_time=now + timedelta(seconds=45),
         **common,
     )
-    if settings.intraday_v24_enabled and jobs.v24_coordinator is not None:
+    if settings.intraday_v24_processing_enabled and jobs.v24_coordinator is not None:
         scheduler.add_job(
             jobs.intraday_v24_cycle,
             trigger="cron",

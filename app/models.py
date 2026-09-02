@@ -66,6 +66,7 @@ class Candle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float, default=0)
     value: Mapped[float] = mapped_column(Float, default=0)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class OrderBookLevel(Base):
@@ -102,6 +103,7 @@ class TelegramUser(Base):
     notify_expiry: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_daily_summary: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_watchlist: Mapped[bool] = mapped_column(Boolean, default=True)
+    analysis_mode: Mapped[str] = mapped_column(String(24), default="LEGACY_ONLY", index=True)
     last_report_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -183,6 +185,7 @@ class TradingIdea(Base):
     contradicting_factors: Mapped[str] = mapped_column(Text, default="[]")
     confirmation_count: Mapped[int] = mapped_column(Integer, default=0)
     strategy_version: Mapped[str] = mapped_column(String(64), default="v1", index=True)
+    strategy_family: Mapped[str] = mapped_column(String(24), default="LEGACY", index=True)
     ai_verdict: Mapped[str] = mapped_column(String(24), default="NOT_REQUESTED", index=True)
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -423,6 +426,7 @@ class MarketCandle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float, default=0)
     value: Mapped[float] = mapped_column(Float, default=0)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class FundamentalReport(Base):
@@ -715,6 +719,22 @@ class TradeIdSequence(Base):
     last_sequence: Mapped[int] = mapped_column(Integer)
 
 
+class V24CandidateClaim(Base):
+    """Transactional idempotency claim for one logical v2.4 candidate."""
+
+    __tablename__ = "v24_candidate_claims"
+
+    candidate_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    strategy_version: Mapped[str] = mapped_column(String(64), index=True)
+    ticker: Mapped[str] = mapped_column(String(36), index=True)
+    direction: Mapped[str] = mapped_column(String(8))
+    source_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    trade_id: Mapped[str | None] = mapped_column(
+        ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), nullable=True, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class IdeaJournal(Base):
     """Immutable initial v2.4 decision card; later changes belong in events."""
 
@@ -724,9 +744,12 @@ class IdeaJournal(Base):
         Index("ix_idea_journals_signal", "signal_datetime"),
         Index("ix_idea_journals_ticker", "ticker", "signal_datetime"),
         Index("ix_idea_journals_strategy", "strategy_version", "signal_datetime"),
+        UniqueConstraint("candidate_key", name="uq_idea_journal_candidate_key"),
     )
 
     trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    candidate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    strategy_family: Mapped[str] = mapped_column(String(24), default="INTRADAY_V24")
     strategy_version: Mapped[str] = mapped_column(String(64))
     signal_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ticker: Mapped[str] = mapped_column(String(36))
@@ -790,6 +813,11 @@ class DecisionSnapshotV24(Base):
         ForeignKey("idea_journals.trade_id", ondelete="RESTRICT"), primary_key=True
     )
     strategy_version: Mapped[str] = mapped_column(String(64))
+    strategy_family: Mapped[str] = mapped_column(String(24), default="INTRADAY_V24")
+    risk_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    data_sla_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cost_model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    calibration_model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     signal_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ticker: Mapped[str] = mapped_column(String(36), index=True)
     direction: Mapped[str] = mapped_column(String(8))

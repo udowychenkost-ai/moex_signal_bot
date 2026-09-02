@@ -29,11 +29,15 @@ liquidity, per-trade risk, available capital, portfolio and correlation. A
 missing cap returns `NOT_RELIABLY_CALCULABLE`; it is never treated as infinity
 or zero.
 
-## Configuration limitation
+## Administrator workflow
 
-The repository/service for versioned risk policies is implemented, but a
-dedicated Telegram administrator wizard is not. The legacy per-user “risk %”
-setting is not a V2.4 portfolio-risk policy and must not be treated as one.
-Until an audited operator configuration path is added, production V2.4 remains
-disabled. This is tracked as an implementation gap.
+An ID listed in `TELEGRAM_ADMIN_CHAT_IDS` can use `/riskpolicy` or Settings →
+Risk Budget. The wizard shows the effective policy, collects every field above,
+renders a preview and activates only after explicit confirmation. Activation
+inserts a new unique configuration version with creator and effective time;
+database triggers preserve older versions. Unauthorized users and an
+unconfirmed preview cannot write a policy.
 
+The legacy per-user “risk %” setting is not a V2.4 portfolio-risk policy and is
+never substituted for one. Historical `DecisionSnapshotV24` rows retain the
+exact risk-policy version used at decision time.

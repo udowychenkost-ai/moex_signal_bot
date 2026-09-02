@@ -1,6 +1,6 @@
 # V2.4 journal schema
 
-Alembic revisions `20260901_0014` through `20260901_0020` add the V2.4 schema.
+Alembic revisions `20260901_0014` through `20260902_0021` add the V2.4 schema.
 All revisions are additive and preserve legacy ideas, paper trades, AI logs and
 notification history.
 
@@ -19,6 +19,7 @@ notification history.
 | `journal_health_probes` | Rollback-only write readiness target | Probe rows are never committed |
 | `daily_journal_summaries_v24` | Per-day MODEL/ACTUAL report | Immutable by DB trigger |
 | `v24_notification_outbox` | Idempotent Telegram delivery | Mutable delivery state only |
+| `v24_candidate_claims` | Transactional logical-candidate idempotency key | Bound once to the immutable idea |
 
 ## Identifiers and separation
 
@@ -32,7 +33,8 @@ trade.
 
 The decision snapshot records only facts available at decision time, including
 source/timestamp/SLA, setup/regime, entry/stop/targets, liquidity/risk inputs and
-the audit matrix. It is never backfilled from later data. If old evidence does
+the audit matrix. It also freezes strategy family/version and the risk, Data
+SLA, cost and calibration-model policy versions. It is never backfilled from later data. If old evidence does
 not exist, the correct value is `MISSING_HISTORICAL_EVIDENCE`.
 
 All subsequent observations belong in `trade_event_journal`. Application code
@@ -46,4 +48,3 @@ the legacy application. Use a full `pg_dump -Fc`; do not copy tables
 selectively because foreign keys and immutable evidence must remain consistent.
 Restore into a separate database first and verify `alembic_version`, row counts
 and `/status` journal health before using the backup operationally.
-

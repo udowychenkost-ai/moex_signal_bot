@@ -40,6 +40,25 @@ class ReportFrequency(StrEnum):
     OFF = "off"
 
 
+class StrategyFamily(StrEnum):
+    LEGACY = "LEGACY"
+    INTRADAY_V24 = "INTRADAY_V24"
+
+
+class AnalysisMode(StrEnum):
+    LEGACY_ONLY = "LEGACY_ONLY"
+    INTRADAY_V24_ONLY = "INTRADAY_V24_ONLY"
+    BOTH = "BOTH"
+
+    @property
+    def includes_legacy(self) -> bool:
+        return self in {AnalysisMode.LEGACY_ONLY, AnalysisMode.BOTH}
+
+    @property
+    def includes_v24(self) -> bool:
+        return self in {AnalysisMode.INTRADAY_V24_ONLY, AnalysisMode.BOTH}
+
+
 class QualityGateDecision(StrEnum):
     PASS = "PASS"
     WEAK = "WEAK"

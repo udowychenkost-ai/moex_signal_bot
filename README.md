@@ -62,28 +62,51 @@ sector peer coverage недостаточен, fundamental factor честно �
 
 ## INTRADAY V2.4 safety layer
 
-Version `0.6.0` adds an isolated `intraday_v2_4` foundation: immutable
-decision journal, separate MODEL/ACTUAL records, explicit Telegram confirmation,
-append-only events, Data SLA/microstructure/risk/liquidity gates, MTF setup and
-execution assessments, calibration/statistics, kill switch, final audit,
-V2.4 cards, daily reports and structured `/status` diagnostics. Alembic head is
-`20260901_0020`.
+Version `0.7.0` completes the isolated `intraday_v2_4` application layer:
+one live/shadow orchestrator now composes the existing MTF, Data Integrity,
+Data SLA, microstructure, liquidity, cost, risk, calibration, adversarial and
+Final Audit services. Its initial `DecisionSnapshotV24` and policy-version
+references are immutable; MODEL and explicitly confirmed ACTUAL trades remain
+separate and later changes use append-only events. Candidate claims and the
+Telegram outbox make scheduler retries idempotent. Alembic head is
+`20260902_0021`.
 
 The safe deployment default is:
 
 ```env
+ENABLE_LEGACY_STRATEGY=true
 INTRADAY_V24_ENABLED=false
+INTRADAY_V24_SHADOW_ENABLED=false
 INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
 INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
 INTRADAY_V24_LEVERAGE_ENABLED=false
 ```
 
-This is not yet an enabled live V2.4 publication path. The scheduled V2.4 job
-recovers journal state and ingests its MTF data, but the final live
-scan-to-audit-to-journal orchestrator and the administrator risk-policy wizard
-are not registered. Keep the flag disabled until those gaps and the required
-data/configuration prerequisites in the gap analysis are closed. The existing
-V1/V2 LIVE OBSERVATION workflow remains unchanged.
+`ENABLE_LEGACY_STRATEGY` controls the existing V1/V2 scanner.
+`INTRADAY_V24_ENABLED` controls V2.4 production publication, while
+`INTRADAY_V24_SHADOW_ENABLED` may run the same fail-closed engine and collect
+journals/model observations without publishing recommendations. Both engines
+use one APScheduler and failure-isolated jobs.
+
+Every Telegram user has a persistent `analysis_mode`: `LEGACY_ONLY` (migration
+and new-user default), `INTRADAY_V24_ONLY`, or `BOTH`. It controls delivery and
+presentation, not engine execution or ownership of historical records. In
+`BOTH`, statistics stay in separate Classic/Intraday sections; opposite
+directions are displayed independently with a conflict warning. Open ACTUAL
+V2.4 positions remain visible even after a user switches away from Intraday.
+
+An authorized ID from `TELEGRAM_ADMIN_CHAT_IDS` can open `/riskpolicy` or
+Settings → Risk Budget, review the effective policy, enter all existing risk
+domain fields, preview, and explicitly confirm a new effective-dated version.
+Previous versions and the version referenced by historical snapshots are never
+overwritten.
+
+Production remains deliberately disabled. The bundled public source does not
+provide the verified event/news context, full reliable L2, tick/session and
+borrow facts required by the deterministic gates; Data SLA, liquidity, cost,
+risk and opportunity policies also require operator-approved values, and the
+strategy is uncalibrated. Missing data remains `DATA_NOT_AVAILABLE` and cannot
+be converted to a pass by Gemini.
 
 V2.4 documentation:
 
@@ -94,6 +117,7 @@ V2.4 documentation:
 - [`docs/RISK_BUDGET.md`](docs/RISK_BUDGET.md)
 - [`docs/CALIBRATION.md`](docs/CALIBRATION.md)
 - [`docs/FINAL_AUDIT.md`](docs/FINAL_AUDIT.md)
+- [`docs/INTRADAY_V2_4_PRODUCTION_CHECKLIST.md`](docs/INTRADAY_V2_4_PRODUCTION_CHECKLIST.md)
 
 ## Архитектура
 

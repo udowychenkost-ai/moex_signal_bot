@@ -12,11 +12,13 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain import AnalysisMode
 from app.models import (
     ActualTradeJournal,
     DailyJournalSummaryV24,
     IdeaJournal,
     ModelTradeJournal,
+    TelegramUser,
     V24NotificationOutbox,
 )
 from app.position_management_v24 import OpenPositionAssessment
@@ -369,6 +371,30 @@ class V24OutboxService:
         available_at: datetime,
         trade_id: str | None = None,
     ) -> bool:
+        async with self.session_factory() as session, session.begin():
+            return await self.enqueue_in_session(
+                session,
+                telegram_id=telegram_id,
+                notification_key=notification_key,
+                notification_type=notification_type,
+                payload=payload,
+                available_at=available_at,
+                trade_id=trade_id,
+            )
+
+    async def enqueue_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        telegram_id: int,
+        notification_key: str,
+        notification_type: str,
+        payload: str,
+        available_at: datetime,
+        trade_id: str | None = None,
+    ) -> bool:
+        """Enqueue within the decision transaction to close the journal/send crash gap."""
+
         values = {
             "telegram_id": telegram_id,
             "notification_key": notification_key,
@@ -380,28 +406,27 @@ class V24OutboxService:
             "available_at": available_at,
             "last_error": "",
         }
-        async with self.session_factory() as session, session.begin():
-            dialect = session.get_bind().dialect.name
-            if dialect == "postgresql":
-                statement = postgresql_insert(V24NotificationOutbox).values(**values)
-            elif dialect == "sqlite":
-                statement = sqlite_insert(V24NotificationOutbox).values(**values)
-            else:
-                existing = await session.scalar(
-                    select(V24NotificationOutbox.id).where(
-                        V24NotificationOutbox.telegram_id == telegram_id,
-                        V24NotificationOutbox.notification_key == notification_key,
-                    )
+        dialect = session.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement = postgresql_insert(V24NotificationOutbox).values(**values)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(V24NotificationOutbox).values(**values)
+        else:
+            existing = await session.scalar(
+                select(V24NotificationOutbox.id).where(
+                    V24NotificationOutbox.telegram_id == telegram_id,
+                    V24NotificationOutbox.notification_key == notification_key,
                 )
-                if existing is not None:
-                    return False
-                session.add(V24NotificationOutbox(**values))
-                return True
-            statement = statement.on_conflict_do_nothing(
-                index_elements=["telegram_id", "notification_key"]
             )
-            result = await session.execute(statement)
-            return bool(result.rowcount)
+            if existing is not None:
+                return False
+            session.add(V24NotificationOutbox(**values))
+            return True
+        statement = statement.on_conflict_do_nothing(
+            index_elements=["telegram_id", "notification_key"]
+        )
+        result = await session.execute(statement)
+        return bool(result.rowcount)
 
     async def enqueue_market_summary_once(
         self,
@@ -441,6 +466,16 @@ class V24OutboxService:
             async with self.session_factory() as session, session.begin():
                 claimed = await session.get(V24NotificationOutbox, item.id, with_for_update=True)
                 if claimed is None or claimed.status != "PENDING":
+                    continue
+                user = await session.get(TelegramUser, claimed.telegram_id)
+                if (
+                    user is not None
+                    and claimed.notification_type
+                    in {"NEW_V24_IDEA", "V24_DAILY_JOURNAL", "DAILY_MARKET_SUMMARY"}
+                    and not AnalysisMode(user.analysis_mode).includes_v24
+                ):
+                    claimed.status = "CANCELLED"
+                    claimed.last_error = "USER_ANALYSIS_MODE_CHANGED"
                     continue
                 claimed.status = "SENDING"
                 claimed.attempt_count += 1

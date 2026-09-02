@@ -723,6 +723,29 @@ class AIAnalystService:
             return self._failed_review(final, attempts)
         return self._review_result(analysis, final, attempts)
 
+    async def review_verified_snapshot(self, snapshot: dict[str, object]) -> AIReviewResult:
+        """Review an already deterministic-gate-qualified compact v2.4 snapshot."""
+
+        if not self.settings.ai_filter_enabled:
+            return self._configured_failure("AI filter is disabled")
+        analysis, final, attempts = await self._generate_structured(
+            response_model=AIAnalysis,
+            system_prompt=(
+                SYSTEM_PROMPT
+                + "\nThis is an INTRADAY_V24 second opinion. Use only supplied fields. "
+                "Never infer missing external facts and never claim that an unavailable field "
+                "passed. A deterministic hard FAIL cannot be overridden by your verdict."
+            ),
+            payload=snapshot,
+            schema=AIAnalysis.model_json_schema(),
+            schema_name="moex_intraday_v24_ai_verdict",
+            max_output_tokens=self.settings.ai_max_output_tokens,
+        )
+        if analysis is None:
+            logger.warning("V2.4 AI review failed: %s", _attempt_error(attempts))
+            return self._failed_review(final, attempts)
+        return self._review_result(analysis, final, attempts)
+
     async def summarize_market(self, market_snapshot: dict[str, object]) -> MarketAIReviewResult:
         unavailable = "AI summary unavailable; deterministic market metrics remain available."
         analysis, final, attempts = await self._generate_structured(

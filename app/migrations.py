@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_REVISION = "20260819_0001"
-HEAD_REVISION = "20260901_0020"
+HEAD_REVISION = "20260902_0021"
 BASELINE_TABLES = {
     "instruments",
     "candles",

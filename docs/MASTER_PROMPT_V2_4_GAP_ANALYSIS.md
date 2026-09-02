@@ -180,3 +180,25 @@ The two implementable integration gaps are the end-to-end scan-to-journal/live
 position orchestrator and a dedicated administrator workflow for versioned risk
 policy. Provider-dependent gaps remain full L2, borrow, real-time news,
 corporate actions, some cross-asset data and actual broker costs/fills.
+
+## Final integration update (0.7.0)
+
+Alembic `20260902_0021` and the final integration phase close the two previously
+identified implementation gaps:
+
+- `IntradayV24Orchestrator` now composes the existing fail-closed services and
+  commits candidate claim, immutable journal/snapshot, optional model record and
+  notification outbox atomically;
+- the single scheduler runs ACTUAL recovery, MODEL lifecycle, ingestion and
+  V2.4 scan without coupling failures to the legacy scan;
+- persistent `LEGACY_ONLY` / `INTRADAY_V24_ONLY` / `BOTH` modes control
+  user-facing delivery and views without mixing cohorts or deleting history;
+- the Telegram admin Risk Budget wizard creates confirmed, effective-dated
+  immutable policy versions;
+- snapshot policy references and `strategy_family` make decisions reproducible
+  and prevent cross-strategy deduplication.
+
+This changes implementation readiness, not market-data or statistical
+readiness. Production remains `INTRADAY_V24_ENABLED=false`; the exact remaining
+provider/configuration/calibration gates are listed in
+`INTRADAY_V2_4_PRODUCTION_CHECKLIST.md`.

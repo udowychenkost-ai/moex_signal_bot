@@ -15,21 +15,27 @@ MOEX ISS ingestion (1d, 1h, 15m, 5m; optional verified 1m)
   -> deterministic MTF technical / market regime / setup
   -> entry / path-to-TP / execution / cost / liquidity / risk
   -> calibration + statistical admission
+  -> Gemini review only after deterministic pre-gates are clear
   -> adversarial check -> all-mandatory FinalAudit
   -> one V2.4 classification
   -> immutable IdeaJournal + DecisionSnapshotV24
   -> separate MODEL and user-confirmed ACTUAL journals
   -> append-only TradeEventJournal
+  -> mode-filtered idempotent Telegram outbox
 ```
 
-The scheduled V2.4 coordinator currently performs recovery and data ingestion
-in strict priority order: confirmed ACTUAL positions, active/pending MODEL
-trades, then the V2.4 ingestion pass. The pure analysis, gate, classification
-and persistence services are implemented and tested, but a live end-to-end
-candidate orchestrator is intentionally not registered yet. Therefore
-`INTRADAY_V24_ENABLED` must remain `false` in production. Enabling it today
-warms the isolated MTF data and reports readiness; it does not publish V2.4
-ideas. This is an explicit remaining integration gap, not a silent success.
+`IntradayV24Orchestrator` is the single application service for this chain. The
+scheduled coordinator runs confirmed ACTUAL recovery/management first,
+active/pending MODEL lifecycle second, then canonical ingestion and the isolated
+V2.4 scan. A transactional SHA-256 candidate claim prevents duplicate journal,
+snapshot, model and outbox rows across retries. Legacy scan/reporting and V2.4
+remain separate jobs in the same APScheduler, so an application error in one
+does not stop the other.
+
+`INTRADAY_V24_ENABLED` remains `false` in production because external facts and
+approved policies cannot yet satisfy all gates. `INTRADAY_V24_SHADOW_ENABLED`
+is a separate collection switch: it may journal/model candidates without
+granting publication eligibility.
 
 ## Important modules
 
@@ -40,9 +46,11 @@ ideas. This is an explicit remaining integration gap, not a silent success.
 | Execution and model fills | `execution_v24.py`, `model_execution_v24.py` |
 | Cost, liquidity and risk | `risk_v24.py`, `liquidity_v24.py`, `opportunity.py` |
 | Audit and classification | `adversarial.py`, `final_audit.py`, `classification_v24.py` |
+| Application orchestration | `orchestrator_v24.py` |
 | Journals | `journal.py`, `actual_trades.py`, `models.py` |
 | Statistics | `statistics_v24.py`, `calibration.py` |
 | Runtime safety | `journal_health.py`, `kill_switch.py`, `scheduler_v24.py`, `observability_v24.py` |
+| Versioned admin policy | `risk_policy_admin.py` |
 | Telegram/reporting | `reporting_v24.py`, `bot.py`, `telegram_ui.py` |
 
 ## Fail-closed invariants
@@ -70,14 +78,16 @@ supported deployment topology.
 
 ## Production-enablement prerequisites
 
-Do not register the final live candidate orchestrator until all of the
-following exist and pass an integration test on the deployment:
+Do not enable production publication until all of the following exist and pass
+an integration test on the deployment:
 
 1. explicitly approved Data SLA values and source classes;
 2. a versioned risk policy and cost inputs supplied by the operator;
 3. reliable full-depth/order-impact inputs where a depth cap is mandatory;
 4. callable providers for the required event/corporate-action/borrow facts;
-5. the end-to-end scan adapter that writes a complete immutable snapshot,
-   model lifecycle and idempotent notification in one tested workflow;
+5. a normal initialized kill switch and available journal at the exact release
+   Alembic head;
 6. shadow/forward observations sufficient for the chosen admission policy.
 
+The full release gate is maintained in
+[`INTRADAY_V2_4_PRODUCTION_CHECKLIST.md`](INTRADAY_V2_4_PRODUCTION_CHECKLIST.md).

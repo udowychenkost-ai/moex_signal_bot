@@ -14,17 +14,20 @@ from app.config import Settings
 from app.data_sla import DataSLAConfig
 from app.journal_health import JournalHealthService, JournalStorageHealth
 from app.kill_switch import KillSwitchService, KillSwitchStatus
+from app.liquidity_v24 import LiquidityModelConfig
 from app.models import (
     ActualTradeJournal,
     DecisionSnapshotV24,
     IdeaJournal,
+    JobRunState,
     ModelTradeJournal,
 )
 from app.provider_health import GeminiHealthMonitor
-from app.risk_v24 import RiskBudgetRepository
+from app.risk_v24 import CostModelConfig, RiskBudgetRepository
 from app.v24_domain import (
     CalibrationStatus,
     ConfigurationStatus,
+    JournalDirection,
     RiskBudgetStatus,
     StatisticalAdmissionStatus,
 )
@@ -57,6 +60,17 @@ class V24RuntimeStatus:
     classification_distribution: dict[str, int]
     setup_distribution: dict[str, int]
     regime_distribution: dict[str, int]
+    legacy_enabled: bool = True
+    shadow_enabled: bool = False
+    production_notification_enabled: bool = False
+    final_audit_ready: bool = False
+    external_context_ready: bool = False
+    liquidity_configured: bool = False
+    cost_configured: bool = False
+    latest_scan_at: datetime | None = None
+    latest_scan_status: str = "NEVER"
+    latest_scan_candidates: int = 0
+    latest_scan_errors: int = 0
 
 
 class V24ObservabilityService:
@@ -91,9 +105,11 @@ class V24ObservabilityService:
             )
             ideas = list(
                 await session.scalars(
-                    select(IdeaJournal).where(
+                    select(IdeaJournal)
+                    .where(
                         IdeaJournal.strategy_version == self.settings.intraday_v24_strategy_version
                     )
+                    .order_by(IdeaJournal.signal_datetime)
                 )
             )
             models = list(
@@ -123,6 +139,7 @@ class V24ObservabilityService:
                     )
                 )
             )
+            scan_state = await session.get(JobRunState, "intraday_v24_cycle")
         calibration_status = await self._calibration_status(
             models,
             checked_at,
@@ -132,6 +149,46 @@ class V24ObservabilityService:
             self.gemini_health.last_report.api_status
             if self.gemini_health is not None and self.gemini_health.last_report is not None
             else "NOT_CHECKED"
+        )
+        try:
+            scan_details = json.loads(scan_state.details or "{}") if scan_state else {}
+        except (TypeError, json.JSONDecodeError):
+            scan_details = {}
+        if not isinstance(scan_details, dict):
+            scan_details = {}
+        scan_result = scan_details.get("scan", scan_details)
+        if not isinstance(scan_result, dict):
+            scan_result = {}
+        liquidity_configured = (
+            LiquidityModelConfig.from_settings(self.settings).status
+            is ConfigurationStatus.CONFIGURED
+        )
+        cost_config = CostModelConfig(
+            broker_commission_pct=self.settings.intraday_v24_broker_commission_pct,
+            exchange_fee_pct=self.settings.intraday_v24_exchange_fee_pct,
+            entry_slippage_bps=self.settings.intraday_v24_entry_slippage_bps,
+            exit_slippage_bps=self.settings.intraday_v24_exit_slippage_bps,
+            stop_slippage_bps=self.settings.intraday_v24_stop_slippage_bps,
+            short_carry_pct_per_day=self.settings.intraday_v24_short_carry_pct,
+        )
+        cost_configured = all(
+            cost_config.status_for(direction).value == "CONFIGURED"
+            for direction in (JournalDirection.LONG, JournalDirection.SHORT)
+        )
+        latest_audit_pass = bool(ideas and ideas[-1].audit_status == "PASS")
+        # The bundled provider deliberately returns DATA_NOT_AVAILABLE. This
+        # must only become true when an authenticated point-in-time provider is
+        # wired and health-checked, not merely when a feature flag is toggled.
+        external_context_ready = False
+        final_audit_ready = bool(
+            journal.available
+            and data_sla is ConfigurationStatus.CONFIGURED
+            and risk_policy is not None
+            and risk_policy.status is RiskBudgetStatus.CONFIGURED
+            and liquidity_configured
+            and cost_configured
+            and external_context_ready
+            and latest_audit_pass
         )
         status = V24RuntimeStatus(
             enabled=self.settings.intraday_v24_enabled,
@@ -183,6 +240,27 @@ class V24ObservabilityService:
             ),
             setup_distribution=dict(Counter(item.setup or "UNKNOWN" for item in ideas)),
             regime_distribution=dict(Counter(item.market_regime or "UNKNOWN" for item in ideas)),
+            legacy_enabled=self.settings.enable_legacy_strategy,
+            shadow_enabled=self.settings.intraday_v24_shadow_enabled,
+            production_notification_enabled=(
+                self.settings.intraday_v24_enabled
+                and final_audit_ready
+                and kill.allows_new_positions
+            ),
+            final_audit_ready=final_audit_ready,
+            external_context_ready=external_context_ready,
+            liquidity_configured=liquidity_configured,
+            cost_configured=cost_configured,
+            latest_scan_at=scan_state.finished_at if scan_state else None,
+            latest_scan_status=(
+                "OK"
+                if scan_state is not None and scan_state.success is True
+                else "ERROR"
+                if scan_state is not None and scan_state.success is False
+                else "NEVER"
+            ),
+            latest_scan_candidates=int(scan_result.get("candidates", 0) or 0),
+            latest_scan_errors=int(scan_result.get("errors", 0) or 0),
         )
         self.log(status)
         return status
@@ -201,6 +279,9 @@ class V24ObservabilityService:
             if not isinstance(gates, dict):
                 failures["INVALID_GATE_RESULTS"] += 1
                 continue
+            final_audit = gates.get("final_audit")
+            if isinstance(final_audit, dict) and isinstance(final_audit.get("gates"), dict):
+                gates = final_audit["gates"]
             for gate, result in gates.items():
                 normalized = result.get("result") if isinstance(result, dict) else result
                 if normalized == "FAIL":

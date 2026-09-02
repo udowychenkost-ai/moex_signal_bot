@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moex-signal-bot"
-version = "0.6.0"
+version = "0.7.0"
 description = "Telegram trading signal bot backed by MOEX ISS"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,8 +24,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
-  "pytest-asyncio>=0.24,<1",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.4,<2",
   "ruff>=0.8,<1",
 ]
 

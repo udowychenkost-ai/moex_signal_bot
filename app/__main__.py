@@ -39,6 +39,7 @@ from app.observability_v24 import V24ObservabilityService
 from app.observation import DataFreshnessGuard
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService
+from app.orchestrator_v24 import IntradayV24Orchestrator
 from app.orderbook_ingestion import OrderBookIngestionService
 from app.paper import PaperTradingService
 from app.provider_health import GeminiHealthMonitor
@@ -46,6 +47,7 @@ from app.quality import QualityGate
 from app.reporting import ReportingService
 from app.reporting_v24 import DailyJournalServiceV24, V24OutboxService
 from app.repositories import get_active_instrument, get_candles, list_active_instruments
+from app.risk_policy_admin import RiskPolicyAdminService
 from app.scanner import MarketScanner
 from app.scheduler import ScheduledJobs, build_scheduler
 from app.scheduler_v24 import V24SchedulerCoordinator
@@ -221,6 +223,7 @@ async def run_bot() -> None:
                 gemini_health,
                 liquidity,
                 ActualTradeService(session_factory),
+                RiskPolicyAdminService(session_factory, settings.admin_chat_ids),
             )
             recovery_tracking = await tracker.track_all()
             recovery_tracking.update(await experiment_tracker.track_all())
@@ -238,8 +241,16 @@ async def run_bot() -> None:
                 operations,
                 orderbooks=orderbooks,
                 v24_coordinator=(
-                    V24SchedulerCoordinator.from_services(session_factory, ingestion)
-                    if settings.intraday_v24_enabled
+                    V24SchedulerCoordinator.from_services(
+                        session_factory,
+                        ingestion,
+                        IntradayV24Orchestrator(
+                            settings,
+                            session_factory,
+                            ai_analyst=ai_analyst,
+                        ),
+                    )
+                    if settings.intraday_v24_processing_enabled
                     else None
                 ),
             )

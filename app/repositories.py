@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import (
     DEFAULT_SECTORS,
+    AnalysisMode,
     CandleData,
     InstrumentData,
     MarketCandleData,
@@ -127,6 +128,7 @@ async def latest_candle_begin(session: AsyncSession, secid: str, timeframe: str)
 async def upsert_candles(session: AsyncSession, candles: list[CandleData]) -> int:
     if not candles:
         return 0
+    fetched_at = datetime.now(UTC)
     values = [
         {
             "secid": item.secid,
@@ -140,6 +142,7 @@ async def upsert_candles(session: AsyncSession, candles: list[CandleData]) -> in
             "close": item.close,
             "volume": item.volume,
             "value": item.value,
+            "fetched_at": fetched_at,
         }
         for item in candles
     ]
@@ -158,6 +161,7 @@ async def upsert_candles(session: AsyncSession, candles: list[CandleData]) -> in
             "close": excluded.close,
             "volume": excluded.volume,
             "value": excluded.value,
+            "fetched_at": excluded.fetched_at,
         }
         if dialect == "postgresql":
             statement = statement.on_conflict_do_update(
@@ -267,6 +271,7 @@ async def latest_market_candle_begin(
 async def upsert_market_candles(session: AsyncSession, candles: list[MarketCandleData]) -> int:
     if not candles:
         return 0
+    fetched_at = datetime.now(UTC)
     values = [
         {
             "symbol": item.symbol.upper(),
@@ -279,6 +284,7 @@ async def upsert_market_candles(session: AsyncSession, candles: list[MarketCandl
             "close": item.close,
             "volume": item.volume,
             "value": item.value,
+            "fetched_at": fetched_at,
         }
         for item in candles
     ]
@@ -295,6 +301,7 @@ async def upsert_market_candles(session: AsyncSession, candles: list[MarketCandl
             "close": excluded.close,
             "volume": excluded.volume,
             "value": excluded.value,
+            "fetched_at": excluded.fetched_at,
         }
         if dialect == "postgresql":
             statement = statement.on_conflict_do_update(
@@ -515,6 +522,7 @@ async def update_user_settings(
     notify_expiry: bool | None = None,
     notify_daily_summary: bool | None = None,
     notify_watchlist: bool | None = None,
+    analysis_mode: str | None = None,
 ) -> None:
     values: dict[str, object] = {}
     if timeframe is not None:
@@ -527,6 +535,8 @@ async def update_user_settings(
         values["idea_horizon"] = idea_horizon
     if minimum_confidence is not None:
         values["minimum_confidence"] = minimum_confidence
+    if analysis_mode is not None:
+        values["analysis_mode"] = AnalysisMode(analysis_mode).value
     for name, value in (
         ("ai_filter_enabled", ai_filter_enabled),
         ("notify_new_idea", notify_new_idea),

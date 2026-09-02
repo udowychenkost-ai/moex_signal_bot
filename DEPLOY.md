@@ -66,7 +66,7 @@ the app both have healthchecks and `restart: unless-stopped`. Database data live
 in the named `moex_postgres` volume.
 
 Revisions through `20260827_0013` and the V2.4 chain
-`20260901_0014`–`20260901_0020` only add columns/tables and
+`20260901_0014`–`20260902_0021` only add columns/tables and
 preserve every existing V1/V2 `TradingIdea` and experiment row. Existing V1
 rows remain labeled `strategy_version=v1`; V2 forward statistics use
 `v2_ai_quality_filter` and do not mix the baseline. Revision `0011` adds only
@@ -79,11 +79,16 @@ with a fabricated zero quantity.
 
 V2.4 revisions add immutable decision/context/daily-summary records, separate
 MODEL/ACTUAL journals, append-only events and policies, persistent kill-switch
-history, journal health and an idempotent notification outbox. They do not
-backfill or rewrite legacy decisions. Production must keep
-`INTRADAY_V24_ENABLED=false`: the safety services are present, but the final
-live scan-to-journal orchestrator and Telegram administrator risk-policy wizard
-are explicitly not registered yet.
+history, journal health, transactional candidate claims and an idempotent
+notification outbox. Revision `0021` adds the persistent user analysis mode,
+strategy-family markers, source fetch timestamps and snapshot policy-version
+references. Existing users are explicitly migrated to `LEGACY_ONLY`; legacy
+ideas remain `LEGACY`. No historical decision is rebuilt or deleted.
+
+The V2.4 orchestrator and admin risk-policy wizard are registered in 0.7.0, but
+production must still keep `INTRADAY_V24_ENABLED=false`. Public data and current
+configuration cannot yet satisfy every mandatory gate. Shadow processing is a
+separate opt-in and never permits Telegram publication.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -120,7 +125,7 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the 0.6.0 update, back up PostgreSQL as described below
+Before the 0.7.0 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -139,15 +144,18 @@ AI_FALLBACK_MODEL=gemini-flash-lite-latest
 AI_MAX_OUTPUT_TOKENS=4096
 AI_FILTER_ENABLED=true
 AI_ALLOW_UNREVIEWED_FALLBACK=false
+ENABLE_LEGACY_STRATEGY=true
 INTRADAY_V24_ENABLED=false
+INTRADAY_V24_SHADOW_ENABLED=false
 INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
 INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
 INTRADAY_V24_LEVERAGE_ENABLED=false
 ```
 
-Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. The 0.6.0 V2.4
-foundation is fail-closed and auditable, but the final live candidate
-orchestrator and administrator risk-policy wizard remain explicit gaps.
+Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. Version 0.7.0 has
+the fail-closed integration code, but external data, approved Data SLA,
+liquidity/cost/opportunity settings, Risk Budget and calibration must pass the
+separate production checklist first.
 
 Then update without deleting the database volume:
 
@@ -155,13 +163,23 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.6.0/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.7.0/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
 if grep -q '^INTRADAY_V24_ENABLED=' .env; then
   sed -i 's/^INTRADAY_V24_ENABLED=.*/INTRADAY_V24_ENABLED=false/' .env
 else
   printf '%s\n' 'INTRADAY_V24_ENABLED=false' >> .env
+fi
+if grep -q '^INTRADAY_V24_SHADOW_ENABLED=' .env; then
+  sed -i 's/^INTRADAY_V24_SHADOW_ENABLED=.*/INTRADAY_V24_SHADOW_ENABLED=false/' .env
+else
+  printf '%s\n' 'INTRADAY_V24_SHADOW_ENABLED=false' >> .env
+fi
+if grep -q '^ENABLE_LEGACY_STRATEGY=' .env; then
+  sed -i 's/^ENABLE_LEGACY_STRATEGY=.*/ENABLE_LEGACY_STRATEGY=true/' .env
+else
+  printf '%s\n' 'ENABLE_LEGACY_STRATEGY=true' >> .env
 fi
 if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
   sed -i 's/^AI_MAX_OUTPUT_TOKENS=.*/AI_MAX_OUTPUT_TOKENS=4096/' .env
@@ -203,13 +221,17 @@ UNION ALL SELECT 'trade_event_journal', COUNT(*) FROM trade_event_journal;
 SQL
 ```
 
-The expected Alembic revision is `20260901_0020`. Do not run `docker compose
+The expected Alembic revision is `20260902_0021`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
 
-After the app starts, `/status` must show Alembic `20260901_0020`, journal
-`AVAILABLE`, V2.4 mode `DISABLED`, and the actual Data SLA/risk/calibration/kill
-states. `NOT_CONFIGURED` is expected for policies not yet approved and must not
-be “fixed” with invented limits.
+After the app starts, `/status` must show Alembic `20260902_0021`, Legacy
+`ENABLED`, Intraday engine/shadow/publication `DISABLED`, journal `AVAILABLE`,
+and the actual Data SLA/risk/calibration/kill states. `NOT_CONFIGURED` is
+expected for policies not yet approved and must not be “fixed” with invented
+limits. In Telegram, Settings → Режим анализа persists the per-user selection;
+existing users start in `LEGACY_ONLY`. Admins listed in
+`TELEGRAM_ADMIN_CHAT_IDS` can use `/riskpolicy`, but activation always requires
+an explicit confirmation and creates a new policy version.
 
 V2.1.5.1 adds the independent `order_book_ingestion` job. Public ISS provides a
 delayed official best bid/offer feed but not guaranteed depth; the bot stores

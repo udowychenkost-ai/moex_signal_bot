@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.domain import IdeaDirection, IdeaHorizon, IdeaStatus, ReportFrequency
+from app.domain import AnalysisMode, IdeaDirection, IdeaHorizon, IdeaStatus, ReportFrequency
 from app.idea_repository import (
     get_idea,
     list_open_ideas,
@@ -65,7 +65,7 @@ def format_trading_idea(idea: TradingIdea, *, timezone: str = "Europe/Moscow") -
     formed = _aware_utc(idea.created_at).astimezone(ZoneInfo(timezone))
     regime_icon = {"BULL": "🟢", "BEAR": "🔴", "SIDEWAYS": "🟡"}.get(idea.market_regime or "", "⚪")
     return (
-        f"{icon} <b>{action} — {escape(idea.instrument_name)}</b>\n\n"
+        f"🔵 <b>Классический</b>\n{icon} <b>{action} — {escape(idea.instrument_name)}</b>\n\n"
         f"<b>{escape(idea.ticker)}</b>\n\n"
         f"💰 Текущая цена: <b>{idea.current_price:.2f} ₽</b>\n"
         f"🎯 Зона {zone_label}: <b>{idea.entry_price_from:.2f}–{idea.entry_price_to:.2f} ₽</b>\n"
@@ -135,6 +135,8 @@ class ReportingService:
         horizon: str | None = None,
         created_after: datetime | None = None,
     ) -> list[TradingIdea]:
+        if not AnalysisMode(user.analysis_mode).includes_legacy:
+            return []
         async with self.session_factory() as session:
             return await list_open_ideas(
                 session,
@@ -156,6 +158,8 @@ class ReportingService:
             users = await list_report_users(session)
         counters = {"users_checked": len(users), "reports_sent": 0, "ideas_sent": 0}
         for user in users:
+            if not AnalysisMode(user.analysis_mode).includes_legacy:
+                continue
             if not report_is_due(user, sent_at):
                 continue
             async with self.session_factory() as session:

@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.6.0"
+    app_version: str = "0.7.0"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -113,13 +113,31 @@ class Settings(BaseSettings):
 
     # Isolated MASTER PROMPT v2.4 intraday mode. It never replaces historical
     # INTRADAY_1D cohorts and remains disabled until its production gates are configured.
+    enable_legacy_strategy: bool = True
     intraday_v24_enabled: bool = False
+    intraday_v24_shadow_enabled: bool = False
     intraday_v24_strategy_version: str = "intraday_v2_4"
     intraday_v24_execution_1m_enabled: bool = False
     intraday_v24_max_holding_trading_days: int = Field(default=2, ge=1, le=2)
     intraday_v24_leverage_enabled: bool = False
     intraday_v24_structural_atr_buffer_multiplier: float | None = Field(default=None, gt=0)
     intraday_v24_market_summary_hour: int = Field(default=11, ge=0, le=23)
+    intraday_v24_cost_model_version: str = "v2_4_unconfigured"
+    intraday_v24_broker_commission_pct: float | None = Field(default=None, ge=0)
+    intraday_v24_exchange_fee_pct: float | None = Field(default=None, ge=0)
+    intraday_v24_entry_slippage_bps: float | None = Field(default=None, ge=0)
+    intraday_v24_exit_slippage_bps: float | None = Field(default=None, ge=0)
+    intraday_v24_stop_slippage_bps: float | None = Field(default=None, ge=0)
+    intraday_v24_short_carry_pct: float | None = Field(default=None, ge=0)
+    intraday_v24_calibration_model_version: str = "v2_4_calibration_1"
+    intraday_v24_opportunity_weight_structural: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_risk: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_capital: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_holding: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_liquidity: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_factor: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_event: float | None = Field(default=None, ge=0)
+    intraday_v24_opportunity_weight_overnight: float | None = Field(default=None, ge=0)
 
     blue_chip_tickers: str = (
         "SBER,GAZP,LKOH,YDEX,NVTK,GMKN,TATN,ROSN,PLZL,MOEX,"
@@ -300,6 +318,10 @@ class Settings(BaseSettings):
         if self.intraday_v24_execution_1m_enabled:
             required.append("1m")
         return required
+
+    @property
+    def intraday_v24_processing_enabled(self) -> bool:
+        return self.intraday_v24_enabled or self.intraday_v24_shadow_enabled
 
     @property
     def liquidity_book_bands(self) -> tuple[float, ...]:

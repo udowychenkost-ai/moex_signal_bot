@@ -4,6 +4,27 @@
 
 ### Added
 
+- V2.4/0.7.0 completes the final application integration without enabling
+  production publication: `IntradayV24Orchestrator` composes the existing hard
+  gates, verified-snapshot Gemini review, adversarial audit, immutable journal,
+  model record and transactional Telegram outbox.
+- Added persistent `LEGACY_ONLY` / `INTRADAY_V24_ONLY` / `BOTH` modes,
+  independent system enable/shadow flags, strategy badges, conflict notices,
+  mode-aware `/ideas` and separately reported legacy/V2.4 statistics.
+- Added the Telegram administrator Risk Budget wizard with authorization,
+  complete-domain preview, explicit confirmation and immutable effective-dated
+  versions. Decision snapshots now freeze risk, Data SLA, cost and calibration
+  policy versions.
+- Added scheduler-driven V2.4 model lifecycle/recovery, deterministic candidate
+  claims, strategy-family separation, fetched-at provenance, extended `/status`
+  readiness/scan diagnostics and Alembic `20260902_0021`.
+- Updated the development test stack to pytest 9 / pytest-asyncio 1.4 after the
+  dependency audit identified a known issue in the previous pytest release.
+- Production remains `INTRADAY_V24_ENABLED=false`. The implementation is ready
+  for controlled shadow collection, but missing full L2/session/tick/borrow and
+  verified realtime event context, unapproved policies and absent calibration
+  keep data/statistical/production readiness false.
+
 - V2.4/0.6.0 adds the isolated `intraday_v2_4` safety foundation without
   changing legacy strategy rules or history: concurrent trade IDs, immutable
   idea/decision/context records, separate MODEL and explicitly user-confirmed
@@ -21,11 +42,12 @@
   structured `/status` observability.
 - Added non-destructive Alembic revisions `20260901_0014`–`20260901_0020` and
   migration tests preserving previous-head data and database-level immutability.
-- `INTRADAY_V24_ENABLED=false` remains mandatory for deployment because the
-  final live scan-to-journal/current-position orchestrator and dedicated
-  Telegram risk-policy administrator wizard are not registered. Provider gaps
-  (full L2, borrow, real-time news/events and some cross-asset facts) remain
-  explicit `DATA_NOT_AVAILABLE` rather than fabricated values.
+- In the 0.6.0 foundation, `INTRADAY_V24_ENABLED=false` remained mandatory
+  because the final live scan-to-journal/current-position orchestrator and
+  dedicated Telegram risk-policy administrator wizard were not registered.
+  Those code gaps are closed in 0.7.0; provider gaps (full L2, borrow, real-time
+  news/events and some cross-asset facts) still remain explicit
+  `DATA_NOT_AVAILABLE` rather than fabricated values.
 
 - V2.1.5.1 implements real MOEX order-book ingestion in the existing runtime:
   an independent two-minute scheduler job, bounded subscribed-depth requests,

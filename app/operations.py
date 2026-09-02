@@ -11,20 +11,27 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.domain import IdeaHorizon, IdeaStatus
+from app.domain import AnalysisMode, IdeaHorizon, IdeaStatus
 from app.migrations import HEAD_REVISION
 from app.models import (
+    ActualTradeJournal,
     CandidateExperiment,
+    IdeaJournal,
     Instrument,
     JobRunState,
+    ModelTradeJournal,
     OrderBookLevel,
     PaperTrade,
+    TelegramUser,
+    TradeEventJournal,
     TradingIdea,
     TradingIdeaEvent,
     TradingIdeaSnapshot,
 )
 from app.observability_v24 import V24ObservabilityService, V24RuntimeStatus
 from app.observation import DataFreshnessGuard, FreshnessOverview, aware_utc
+from app.statistics_v24 import PerformanceMetrics, V24StatisticsService, calculate_performance
+from app.v24_domain import TradeEventType
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +107,21 @@ class IdeaHistory:
     snapshot: TradingIdeaSnapshot | None
     events: tuple[TradingIdeaEvent, ...]
     paper_trade: PaperTrade | None
+
+
+@dataclass(frozen=True, slots=True)
+class V24PeriodStatistics:
+    label: str
+    model: PerformanceMetrics
+    actual: PerformanceMetrics
+
+
+@dataclass(frozen=True, slots=True)
+class V24OpenIdea:
+    idea: IdeaJournal
+    model: ModelTradeJournal | None
+    actual: ActualTradeJournal | None
+    status: str
 
 
 def realized_r(idea: TradingIdea) -> float | None:
@@ -413,6 +435,91 @@ class OperationalService:
                 )
             )
         return tuple(result)
+
+    async def v24_statistics(
+        self, *, now: datetime | None = None
+    ) -> tuple[V24PeriodStatistics, ...]:
+        checked_at = aware_utc(now or datetime.now(UTC))
+        service = V24StatisticsService(self.session_factory)
+        model = await service.model_observations(
+            strategy_version=self.settings.intraday_v24_strategy_version
+        )
+        actual = await service.actual_observations(
+            strategy_version=self.settings.intraday_v24_strategy_version
+        )
+        periods = (
+            ("7 дней", checked_at - timedelta(days=7)),
+            ("30 дней", checked_at - timedelta(days=30)),
+            ("всё время", None),
+        )
+        return tuple(
+            V24PeriodStatistics(
+                label=label,
+                model=calculate_performance(
+                    [item for item in model if start is None or aware_utc(item.closed_at) >= start]
+                ),
+                actual=calculate_performance(
+                    [item for item in actual if start is None or aware_utc(item.closed_at) >= start]
+                ),
+            )
+            for label, start in periods
+        )
+
+    async def v24_open_ideas(self, telegram_id: int) -> tuple[V24OpenIdea, ...]:
+        async with self.session_factory() as session:
+            user = await session.get(TelegramUser, telegram_id)
+            if user is None:
+                return ()
+            actual_rows = list(
+                (
+                    await session.execute(
+                        select(ActualTradeJournal, IdeaJournal)
+                        .join(IdeaJournal, IdeaJournal.trade_id == ActualTradeJournal.trade_id)
+                        .where(ActualTradeJournal.confirmed_by_telegram_id == telegram_id)
+                    )
+                ).all()
+            )
+            closed_actual = set(
+                await session.scalars(
+                    select(TradeEventJournal.actual_trade_id).where(
+                        TradeEventJournal.actual_trade_id.is_not(None),
+                        TradeEventJournal.event_type.in_(
+                            (TradeEventType.FULL_EXIT.value, TradeEventType.CANCEL.value)
+                        ),
+                    )
+                )
+            )
+            rows: list[V24OpenIdea] = []
+            seen: set[str] = set()
+            for actual, idea in actual_rows:
+                if actual.actual_trade_id in closed_actual:
+                    continue
+                rows.append(V24OpenIdea(idea, None, actual, "ACTUAL_OPEN"))
+                seen.add(idea.trade_id)
+            if AnalysisMode(user.analysis_mode).includes_v24:
+                model_rows = list(
+                    (
+                        await session.execute(
+                            select(IdeaJournal, ModelTradeJournal)
+                            .join(
+                                ModelTradeJournal,
+                                ModelTradeJournal.trade_id == IdeaJournal.trade_id,
+                            )
+                            .where(
+                                IdeaJournal.strategy_version
+                                == self.settings.intraday_v24_strategy_version,
+                                ModelTradeJournal.final_exit_time.is_(None),
+                            )
+                            .order_by(IdeaJournal.signal_datetime.desc())
+                        )
+                    ).all()
+                )
+                for idea, model in model_rows:
+                    if idea.trade_id in seen:
+                        continue
+                    status = "ACTIVE" if model.model_entry_time is not None else "PENDING"
+                    rows.append(V24OpenIdea(idea, model, None, status))
+        return tuple(rows)
 
     async def idea_history(self, idea_id: int) -> IdeaHistory | None:
         async with self.session_factory() as session:

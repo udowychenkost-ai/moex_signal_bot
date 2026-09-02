@@ -39,6 +39,7 @@ from app.ai_ux import (
 )
 from app.config import Settings
 from app.domain import (
+    AnalysisMode,
     InsufficientDataError,
     MoexApiError,
     StaleMarketDataError,
@@ -54,7 +55,10 @@ from app.forward import (
     format_new_idea,
     format_open_ideas,
     format_statistics,
+    format_strategy_conflicts,
     format_technical_analysis,
+    format_v24_open_ideas,
+    format_v24_statistics,
 )
 from app.ingestion import IngestionService
 from app.liquidity import LiquidityAssessment, LiquidityService
@@ -80,6 +84,13 @@ from app.repositories import (
     get_active_instrument,
     remove_watchlist_item,
     update_user_settings,
+)
+from app.risk_policy_admin import (
+    RiskPolicyAdminService,
+    RiskPolicyAuthorizationError,
+    RiskPolicyConfirmationRequired,
+    RiskPolicyDraft,
+    format_risk_policy,
 )
 from app.signals import SignalService, format_signal
 from app.telegram_context import (
@@ -134,6 +145,7 @@ class BotServices:
     gemini_health: GeminiHealthMonitor | None = None
     liquidity: LiquidityService | None = None
     actual_trades: ActualTradeService | None = None
+    risk_policy_admin: RiskPolicyAdminService | None = None
 
 
 class ActualEntryStates(StatesGroup):
@@ -148,6 +160,17 @@ class ActualActionStates(StatesGroup):
     exit_price = State()
     remaining_position = State()
     cancel_reason = State()
+
+
+class RiskPolicyStates(StatesGroup):
+    working_capital = State()
+    max_risk_per_trade = State()
+    max_daily_loss = State()
+    max_portfolio_heat = State()
+    max_sector_heat = State()
+    max_correlated_heat = State()
+    available_capital = State()
+    confirmation = State()
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -206,7 +229,9 @@ def statistics_menu_keyboard() -> InlineKeyboardMarkup:
     return statistics_context_keyboard()
 
 
-def settings_menu_keyboard(user: TelegramUser | None = None) -> InlineKeyboardMarkup:
+def settings_menu_keyboard(
+    user: TelegramUser | None = None, *, is_admin: bool = False
+) -> InlineKeyboardMarkup:
     frequency = (
         {
             "strong": "Только сильные",
@@ -232,33 +257,68 @@ def settings_menu_keyboard(user: TelegramUser | None = None) -> InlineKeyboardMa
     risk = f"{user.risk_per_trade_pct:g}%" if user is not None else "—"
     ai_state = "ON ✅" if user is not None and user.ai_filter_enabled else "OFF"
     watch_state = "ON ✅" if user is not None and user.notify_watchlist else "OFF"
+    analysis = (
+        {
+            AnalysisMode.LEGACY_ONLY.value: "Классический",
+            AnalysisMode.INTRADAY_V24_ONLY.value: "Intraday",
+            AnalysisMode.BOTH.value: "Оба",
+        }[user.analysis_mode]
+        if user is not None
+        else "—"
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"🧭 Режим анализа: {analysis}", callback_data="settings:analysis"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"📨 Отчёты: {frequency} ✅", callback_data="settings:frequency"
+            )
+        ],
+        [InlineKeyboardButton(text=f"⏱ Горизонт: {horizon} ✅", callback_data="settings:horizon")],
+        [
+            InlineKeyboardButton(
+                text=f"🎯 Min strength: {strength} ✅", callback_data="settings:strength"
+            )
+        ],
+        [InlineKeyboardButton(text=f"💰 Риск: {risk} ✅", callback_data="settings:risk")],
+        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="settings:notifications")],
+        [InlineKeyboardButton(text=f"🧠 AI filter: {ai_state}", callback_data="settings:ai")],
+        [
+            InlineKeyboardButton(
+                text=f"🔔 Watch notifications: {watch_state}",
+                callback_data="settings:notifications",
+            )
+        ],
+    ]
+    if is_admin:
+        rows.append(
+            [InlineKeyboardButton(text="🛡 Risk Budget Policy", callback_data="risk_policy:view")]
+        )
+    rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def risk_policy_keyboard(*, can_create: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_create:
+        rows.append([InlineKeyboardButton(text="➕ Новая версия", callback_data="risk_policy:new")])
+    rows.append([InlineKeyboardButton(text="⬅️ Настройки", callback_data="settings:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def risk_policy_confirmation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"📨 Отчёты: {frequency} ✅", callback_data="settings:frequency"
+                    text="✅ Подтвердить и активировать",
+                    callback_data="risk_policy:confirm",
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    text=f"⏱ Горизонт: {horizon} ✅", callback_data="settings:horizon"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"🎯 Min strength: {strength} ✅", callback_data="settings:strength"
-                )
-            ],
-            [InlineKeyboardButton(text=f"💰 Риск: {risk} ✅", callback_data="settings:risk")],
-            [InlineKeyboardButton(text="🔔 Уведомления", callback_data="settings:notifications")],
-            [InlineKeyboardButton(text=f"🧠 AI filter: {ai_state}", callback_data="settings:ai")],
-            [
-                InlineKeyboardButton(
-                    text=f"🔔 Watch notifications: {watch_state}",
-                    callback_data="settings:notifications",
-                )
-            ],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="risk_policy:cancel")],
         ]
     )
 
@@ -353,6 +413,21 @@ def settings_values_keyboard(section: str, user: TelegramUser) -> InlineKeyboard
                 ),
             ]
         ]
+    elif section == "analysis":
+        choices = (
+            ("🔵 Классический", AnalysisMode.LEGACY_ONLY.value),
+            ("⚡ Intraday", AnalysisMode.INTRADAY_V24_ONLY.value),
+            ("🔵⚡ Оба", AnalysisMode.BOTH.value),
+        )
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=_selected(label, user.analysis_mode == value),
+                    callback_data=f"set_analysis:{value}",
+                )
+            ]
+            for label, value in choices
+        ]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -371,8 +446,20 @@ def settings_text(user: TelegramUser, services: BotServices) -> str:
         "POSITION_1M": "1 месяц",
         "all": "все",
     }
+    analysis_labels = {
+        AnalysisMode.LEGACY_ONLY.value: "🔵 Классический",
+        AnalysisMode.INTRADAY_V24_ONLY.value: "⚡ Intraday",
+        AnalysisMode.BOTH.value: "🔵⚡ Оба",
+    }
+    intraday_note = (
+        "доступен"
+        if services.settings.intraday_v24_enabled
+        else "временно недоступен для production-уведомлений"
+    )
     return (
         "<b>Настройки идей</b>\n"
+        f"Режим анализа: <b>{analysis_labels[user.analysis_mode]}</b>\n"
+        f"Intraday: <b>{intraday_note}</b>\n"
         f"Частота: <b>{frequency_labels[user.report_frequency]}</b>\n"
         f"Срок: <b>{horizon_labels[user.idea_horizon]}</b>\n"
         f"Риск: <b>{user.risk_per_trade_pct:.2f}%</b>\n"
@@ -1238,13 +1325,41 @@ def create_router(services: BotServices) -> Router:
     @router.message(F.text == "📊 Активные идеи")
     async def my_ideas(message: Message) -> None:
         user = await _ensure_message_user(message, services)
-        page = await context_service.open_ideas_page(user.telegram_id, 0)
+        mode = AnalysisMode(user.analysis_mode)
+        page = (
+            await context_service.open_ideas_page(user.telegram_id, 0)
+            if mode.includes_legacy
+            else ContextPage((), 0, 1, 0)
+        )
+        v24_rows = (
+            await services.operations.v24_open_ideas(user.telegram_id)
+            if services.operations is not None
+            else ()
+        )
+        sections: list[str] = []
+        if mode.includes_legacy:
+            sections.append(format_open_ideas(list(page.items)))
+        if mode.includes_v24 or any(row.actual is not None for row in v24_rows):
+            if mode.includes_v24 and not services.settings.intraday_v24_enabled:
+                sections.append(
+                    "⚠️ Intraday временно недоступен для production-уведомлений; "
+                    "shadow/history и открытые ACTUAL позиции сохранены."
+                )
+            sections.append(format_v24_open_ideas(v24_rows))
+        if mode is AnalysisMode.BOTH:
+            conflict = format_strategy_conflicts(list(page.items), v24_rows)
+            if conflict:
+                sections.insert(0, conflict)
         await message.answer(
-            format_open_ideas(list(page.items)),
-            reply_markup=ideas_page_keyboard(
-                page.items,
-                page=page.page,
-                total_pages=page.total_pages,
+            "\n\n".join(sections) or "Ожидающих и активных идей сейчас нет.",
+            reply_markup=(
+                ideas_page_keyboard(
+                    page.items,
+                    page=page.page,
+                    total_pages=page.total_pages,
+                )
+                if mode.includes_legacy
+                else None
             ),
         )
 
@@ -1253,6 +1368,9 @@ def create_router(services: BotServices) -> Router:
         user = await _ensure_callback_user(callback, services)
         if callback.data is None or callback.message is None:
             await callback.answer()
+            return
+        if not AnalysisMode(user.analysis_mode).includes_legacy:
+            await callback.answer("Классический режим не выбран", show_alert=True)
             return
         page = await context_service.open_ideas_page(
             user.telegram_id, int(callback.data.partition(":")[2])
@@ -1298,51 +1416,71 @@ def create_router(services: BotServices) -> Router:
     @router.message(F.text == "🩺 Система")
     @router.message(F.text == "ℹ️ Статус системы")
     async def application_status(message: Message) -> None:
-        await _ensure_message_user(message, services)
+        user = await _ensure_message_user(message, services)
         if services.operations is None:
             await message.answer("Диагностический сервис недоступен.")
             return
         status = await services.operations.status()
+        mode_label = {
+            AnalysisMode.LEGACY_ONLY.value: "Классический",
+            AnalysisMode.INTRADAY_V24_ONLY.value: "Intraday",
+            AnalysisMode.BOTH.value: "Оба",
+        }[user.analysis_mode]
         await message.answer(
-            format_application_status(status, timezone=services.settings.scheduler_timezone),
+            f"Ваш режим анализа: <b>{mode_label}</b>\n\n"
+            + format_application_status(status, timezone=services.settings.scheduler_timezone),
             reply_markup=status_context_keyboard(),
         )
 
     @router.message(Command("stats"))
     @router.message(F.text == "📈 Статистика")
     async def forward_stats(message: Message) -> None:
-        await _ensure_message_user(message, services)
+        user = await _ensure_message_user(message, services)
         if services.operations is None:
             await message.answer("Диагностический сервис недоступен.")
             return
+        mode_label = {
+            AnalysisMode.LEGACY_ONLY.value: "Классический",
+            AnalysisMode.INTRADAY_V24_ONLY.value: "Intraday",
+            AnalysisMode.BOTH.value: "Оба",
+        }[user.analysis_mode]
         await message.answer(
-            "📈 <b>Статистика</b>\nВыберите период:",
+            f"📈 <b>Статистика</b> · режим {mode_label}\nВыберите период:",
             reply_markup=statistics_menu_keyboard(),
         )
 
     @router.callback_query(F.data.startswith("stats:"))
     async def forward_stats_period(callback: CallbackQuery) -> None:
-        await _ensure_callback_user(callback, services)
+        user = await _ensure_callback_user(callback, services)
         if callback.message is None or callback.data is None or services.operations is None:
             await callback.answer("Статистика недоступна", show_alert=True)
             return
         selected = callback.data.partition(":")[2]
         labels = {"7": "7 дней", "30": "30 дней", "all": "всё время"}
-        periods = await services.operations.statistics()
-        period = next((item for item in periods if item.label == labels.get(selected)), None)
-        if period is None:
+        label = labels.get(selected)
+        if label is None:
             await callback.answer("Период не найден", show_alert=True)
             return
+        mode = AnalysisMode(user.analysis_mode)
+        sections: list[str] = []
+        if mode.includes_legacy:
+            periods = await services.operations.statistics()
+            period = next(item for item in periods if item.label == label)
+            sections.append(format_statistics((period,)))
+        if mode.includes_v24:
+            v24 = await services.operations.v24_statistics()
+            v24_period = next(item for item in v24 if item.label == label)
+            sections.append(format_v24_statistics((v24_period,)))
         await _edit_context(
             callback,
-            format_statistics((period,)),
+            "\n\n".join(sections),
             statistics_context_keyboard(selected, "all"),
         )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("stats_h:"))
     async def forward_stats_horizon(callback: CallbackQuery) -> None:
-        await _ensure_callback_user(callback, services)
+        user = await _ensure_callback_user(callback, services)
         if callback.message is None or callback.data is None or services.operations is None:
             await callback.answer("Статистика недоступна", show_alert=True)
             return
@@ -1350,16 +1488,22 @@ def create_router(services: BotServices) -> Router:
         if horizon not in {"INTRADAY_1D", "SWING_5D", "POSITION_1M"}:
             await callback.answer("Горизонт не найден", show_alert=True)
             return
-        filtered = tuple(
-            replace(
-                period,
-                horizons=tuple(row for row in period.horizons if row.horizon == horizon),
-                experiment_cohorts=tuple(
-                    row for row in period.experiment_cohorts if row.horizon == horizon
-                ),
+        mode = AnalysisMode(user.analysis_mode)
+        sections: list[str] = []
+        if mode.includes_legacy:
+            filtered = tuple(
+                replace(
+                    period,
+                    horizons=tuple(row for row in period.horizons if row.horizon == horizon),
+                    experiment_cohorts=tuple(
+                        row for row in period.experiment_cohorts if row.horizon == horizon
+                    ),
+                )
+                for period in await services.operations.statistics()
             )
-            for period in await services.operations.statistics()
-        )
+            sections.append(format_statistics(filtered))
+        if mode.includes_v24:
+            sections.append(format_v24_statistics(await services.operations.v24_statistics()))
         short_horizon = {
             "INTRADAY_1D": "1d",
             "SWING_5D": "5d",
@@ -1367,14 +1511,14 @@ def create_router(services: BotServices) -> Router:
         }[horizon]
         await _edit_context(
             callback,
-            format_statistics(filtered),
+            "\n\n".join(sections),
             statistics_context_keyboard("all", short_horizon),
         )
         await callback.answer()
 
     @router.callback_query(F.data.regexp(r"^stats_view:(7|30|all):(1d|5d|1m|all)$"))
     async def statistics_view(callback: CallbackQuery) -> None:
-        await _ensure_callback_user(callback, services)
+        user = await _ensure_callback_user(callback, services)
         if callback.message is None or callback.data is None or services.operations is None:
             await callback.answer("Статистика недоступна", show_alert=True)
             return
@@ -1386,20 +1530,33 @@ def create_router(services: BotServices) -> Router:
             "1m": "POSITION_1M",
             "all": None,
         }[horizon_key]
-        period = next(
-            item for item in await services.operations.statistics() if item.label == period_label
-        )
-        if horizon_value is not None:
-            period = replace(
-                period,
-                horizons=tuple(row for row in period.horizons if row.horizon == horizon_value),
-                experiment_cohorts=tuple(
-                    row for row in period.experiment_cohorts if row.horizon == horizon_value
-                ),
+        mode = AnalysisMode(user.analysis_mode)
+        sections: list[str] = []
+        if mode.includes_legacy:
+            period = next(
+                item
+                for item in await services.operations.statistics()
+                if item.label == period_label
             )
+            if horizon_value is not None:
+                period = replace(
+                    period,
+                    horizons=tuple(row for row in period.horizons if row.horizon == horizon_value),
+                    experiment_cohorts=tuple(
+                        row for row in period.experiment_cohorts if row.horizon == horizon_value
+                    ),
+                )
+            sections.append(format_statistics((period,)))
+        if mode.includes_v24:
+            v24 = next(
+                item
+                for item in await services.operations.v24_statistics()
+                if item.label == period_label
+            )
+            sections.append(format_v24_statistics((v24,)))
         await _edit_context(
             callback,
-            format_statistics((period,)),
+            "\n\n".join(sections),
             statistics_context_keyboard(period_key, horizon_key),
         )
         await callback.answer()
@@ -2067,7 +2224,11 @@ def create_router(services: BotServices) -> Router:
             tokens = ["/settings"]
         if len(tokens) == 1:
             await message.answer(
-                settings_text(user, services), reply_markup=settings_menu_keyboard(user)
+                settings_text(user, services),
+                reply_markup=settings_menu_keyboard(
+                    user,
+                    is_admin=user.telegram_id in services.settings.admin_chat_ids,
+                ),
             )
             return
         if len(tokens) != 3:
@@ -2175,14 +2336,19 @@ def create_router(services: BotServices) -> Router:
 
     @router.callback_query(F.data.regexp(r"^status:(refresh|moex|gemini|scheduler|database|scan)$"))
     async def status_section(callback: CallbackQuery) -> None:
-        await _ensure_callback_user(callback, services)
+        user = await _ensure_callback_user(callback, services)
         if callback.message is None or callback.data is None or services.operations is None:
             await callback.answer("Диагностика недоступна", show_alert=True)
             return
         section = callback.data.partition(":")[2]
         status = await services.operations.status()
         if section == "refresh":
-            text = format_application_status(
+            mode_label = {
+                AnalysisMode.LEGACY_ONLY.value: "Классический",
+                AnalysisMode.INTRADAY_V24_ONLY.value: "Intraday",
+                AnalysisMode.BOTH.value: "Оба",
+            }[user.analysis_mode]
+            text = f"Ваш режим анализа: <b>{mode_label}</b>\n\n" + format_application_status(
                 status,
                 timezone=services.settings.scheduler_timezone,
             )
@@ -2247,9 +2413,262 @@ def create_router(services: BotServices) -> Router:
             await _edit_context(
                 callback,
                 settings_text(user, services),
-                settings_menu_keyboard(user),
+                settings_menu_keyboard(
+                    user,
+                    is_admin=user.telegram_id in services.settings.admin_chat_ids,
+                ),
             )
         await callback.answer()
+
+    async def show_risk_policy(message: Message, telegram_id: int) -> None:
+        service = services.risk_policy_admin
+        if service is None:
+            await message.answer("Risk Budget admin service недоступен.")
+            return
+        try:
+            current = await service.current(telegram_id)
+        except RiskPolicyAuthorizationError as error:
+            await message.answer(escape(str(error)))
+            return
+        await message.answer(
+            "🛡 <b>V2.4 Risk Budget Policy</b>\n\n" + format_risk_policy(current),
+            reply_markup=risk_policy_keyboard(),
+        )
+
+    @router.message(Command("riskpolicy"))
+    async def risk_policy_command(message: Message) -> None:
+        user = await _ensure_message_user(message, services)
+        await show_risk_policy(message, user.telegram_id)
+
+    @router.callback_query(F.data == "risk_policy:view")
+    async def risk_policy_view(callback: CallbackQuery) -> None:
+        user = await _ensure_callback_user(callback, services)
+        service = services.risk_policy_admin
+        if callback.message is None or service is None:
+            await callback.answer("Risk Budget service недоступен", show_alert=True)
+            return
+        try:
+            current = await service.current(user.telegram_id)
+        except RiskPolicyAuthorizationError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await _edit_context(
+            callback,
+            "🛡 <b>V2.4 Risk Budget Policy</b>\n\n" + format_risk_policy(current),
+            risk_policy_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == "risk_policy:new")
+    async def risk_policy_new(callback: CallbackQuery, state: FSMContext) -> None:
+        user = await _ensure_callback_user(callback, services)
+        service = services.risk_policy_admin
+        if callback.message is None or service is None:
+            await callback.answer("Risk Budget service недоступен", show_alert=True)
+            return
+        try:
+            service.require_admin(user.telegram_id)
+        except RiskPolicyAuthorizationError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await state.clear()
+        version = datetime.now(UTC).strftime("risk-%Y%m%dT%H%M%SZ")
+        await state.update_data(risk_policy_version=version)
+        await state.set_state(RiskPolicyStates.working_capital)
+        await callback.message.answer(
+            f"Новая immutable версия <code>{version}</code>.\nВведите рабочий капитал в рублях:",
+            reply_markup=ForceReply(selective=True),
+        )
+        await callback.answer("Wizard запущен")
+
+    async def risk_number(
+        message: Message,
+        state: FSMContext,
+        *,
+        field: str,
+        next_state: State,
+        prompt: str,
+        percentage: bool = True,
+    ) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.risk_policy_admin is None:
+            await state.clear()
+            await message.answer("Risk Budget admin service недоступен.")
+            return
+        try:
+            services.risk_policy_admin.require_admin(user.telegram_id)
+        except RiskPolicyAuthorizationError as error:
+            await state.clear()
+            await message.answer(escape(str(error)))
+            return
+        try:
+            value = parse_actual_number(message.text or "")
+            if percentage and value > 100:
+                raise ValueError("Процент не может превышать 100")
+        except ValueError as error:
+            await message.answer(f"Некорректное значение: {escape(str(error))}")
+            return
+        await state.update_data(**{field: value})
+        await state.set_state(next_state)
+        await message.answer(prompt, reply_markup=ForceReply(selective=True))
+
+    @router.message(RiskPolicyStates.working_capital)
+    async def risk_working_capital(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="working_capital_rub",
+            next_state=RiskPolicyStates.max_risk_per_trade,
+            prompt="Максимальный риск на сделку, %:",
+            percentage=False,
+        )
+
+    @router.message(RiskPolicyStates.max_risk_per_trade)
+    async def risk_per_trade(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="max_risk_per_trade_pct",
+            next_state=RiskPolicyStates.max_daily_loss,
+            prompt="Максимальный дневной убыток, %:",
+        )
+
+    @router.message(RiskPolicyStates.max_daily_loss)
+    async def risk_daily_loss(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="max_daily_loss_pct",
+            next_state=RiskPolicyStates.max_portfolio_heat,
+            prompt="Максимальный portfolio heat, %:",
+        )
+
+    @router.message(RiskPolicyStates.max_portfolio_heat)
+    async def risk_portfolio_heat(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="max_portfolio_heat_pct",
+            next_state=RiskPolicyStates.max_sector_heat,
+            prompt="Максимальный sector heat, %:",
+        )
+
+    @router.message(RiskPolicyStates.max_sector_heat)
+    async def risk_sector_heat(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="max_sector_heat_pct",
+            next_state=RiskPolicyStates.max_correlated_heat,
+            prompt="Максимальный correlation/crowding heat, %:",
+        )
+
+    @router.message(RiskPolicyStates.max_correlated_heat)
+    async def risk_correlated_heat(message: Message, state: FSMContext) -> None:
+        await risk_number(
+            message,
+            state,
+            field="max_correlated_factor_heat_pct",
+            next_state=RiskPolicyStates.available_capital,
+            prompt="Доля капитала, доступная для позиций, %:",
+        )
+
+    @router.message(RiskPolicyStates.available_capital)
+    async def risk_available_capital(message: Message, state: FSMContext) -> None:
+        user = await _ensure_message_user(message, services)
+        if services.risk_policy_admin is None:
+            await state.clear()
+            await message.answer("Risk Budget admin service недоступен.")
+            return
+        try:
+            services.risk_policy_admin.require_admin(user.telegram_id)
+        except RiskPolicyAuthorizationError as error:
+            await state.clear()
+            await message.answer(escape(str(error)))
+            return
+        try:
+            value = parse_actual_number(message.text or "")
+            if value > 100:
+                raise ValueError("Процент не может превышать 100")
+            await state.update_data(available_capital_pct=value)
+            data = await state.get_data()
+            draft = RiskPolicyDraft(
+                configuration_version=str(data["risk_policy_version"]),
+                working_capital_rub=float(data["working_capital_rub"]),
+                max_risk_per_trade_pct=float(data["max_risk_per_trade_pct"]),
+                max_daily_loss_pct=float(data["max_daily_loss_pct"]),
+                max_portfolio_heat_pct=float(data["max_portfolio_heat_pct"]),
+                max_sector_heat_pct=float(data["max_sector_heat_pct"]),
+                max_correlated_factor_heat_pct=float(data["max_correlated_factor_heat_pct"]),
+                available_capital_pct=value,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            await state.clear()
+            await message.answer(f"Wizard отменён: {escape(str(error))}")
+            return
+        await state.set_state(RiskPolicyStates.confirmation)
+        await message.answer(
+            "🛡 <b>Проверьте новую Risk Budget Policy</b>\n\n"
+            + format_risk_policy(draft)
+            + "\n\nСтарая версия останется immutable. Активация только по кнопке ниже.",
+            reply_markup=risk_policy_confirmation_keyboard(),
+        )
+
+    @router.callback_query(F.data == "risk_policy:confirm")
+    async def risk_policy_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+        user = await _ensure_callback_user(callback, services)
+        service = services.risk_policy_admin
+        if callback.message is None or service is None:
+            await callback.answer("Risk Budget service недоступен", show_alert=True)
+            return
+        if await state.get_state() != RiskPolicyStates.confirmation.state:
+            await callback.answer("Черновик отсутствует или уже обработан", show_alert=True)
+            return
+        data = await state.get_data()
+        try:
+            draft = RiskPolicyDraft(
+                configuration_version=str(data["risk_policy_version"]),
+                working_capital_rub=float(data["working_capital_rub"]),
+                max_risk_per_trade_pct=float(data["max_risk_per_trade_pct"]),
+                max_daily_loss_pct=float(data["max_daily_loss_pct"]),
+                max_portfolio_heat_pct=float(data["max_portfolio_heat_pct"]),
+                max_sector_heat_pct=float(data["max_sector_heat_pct"]),
+                max_correlated_factor_heat_pct=float(data["max_correlated_factor_heat_pct"]),
+                available_capital_pct=float(data["available_capital_pct"]),
+            )
+            policy = await service.activate(
+                user.telegram_id,
+                draft,
+                confirmed=True,
+            )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            RiskPolicyAuthorizationError,
+            RiskPolicyConfirmationRequired,
+        ) as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await state.clear()
+        await _edit_context(
+            callback,
+            "✅ <b>Новая Risk Budget Policy активирована</b>\n\n" + format_risk_policy(policy),
+            risk_policy_keyboard(),
+        )
+        await callback.answer("Активировано")
+
+    @router.callback_query(F.data == "risk_policy:cancel")
+    async def risk_policy_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+        await _ensure_callback_user(callback, services)
+        await state.clear()
+        if callback.message is not None:
+            await _edit_context(
+                callback,
+                "Создание новой Risk Budget Policy отменено. Текущая версия не менялась.",
+                risk_policy_keyboard(),
+            )
+        await callback.answer("Отменено")
 
     @router.callback_query(F.data.startswith("settings:"))
     async def settings_section(callback: CallbackQuery) -> None:
@@ -2259,6 +2678,7 @@ def create_router(services: BotServices) -> Router:
             return
         section = callback.data.partition(":")[2]
         titles = {
+            "analysis": "Режим анализа",
             "frequency": "Отчёты",
             "horizon": "Горизонт",
             "strength": "Минимальная сила",
@@ -2275,6 +2695,33 @@ def create_router(services: BotServices) -> Router:
             reply_markup=settings_values_keyboard(section, user),
         )
         await callback.answer()
+
+    @router.callback_query(F.data.startswith("set_analysis:"))
+    async def set_analysis_mode(callback: CallbackQuery) -> None:
+        await _ensure_callback_user(callback, services)
+        value = (callback.data or "").partition(":")[2]
+        try:
+            mode = AnalysisMode(value)
+        except ValueError:
+            await callback.answer("Некорректный режим", show_alert=True)
+            return
+        async with services.session_factory() as session, session.begin():
+            await update_user_settings(
+                session,
+                callback.from_user.id,
+                analysis_mode=mode.value,
+            )
+        user = await _ensure_callback_user(callback, services)
+        note = "Режим сохранён."
+        if mode.includes_v24 and not services.settings.intraday_v24_enabled:
+            note += " Intraday временно недоступен для production-уведомлений."
+        if callback.message is not None:
+            await _edit_context(
+                callback,
+                note,
+                settings_values_keyboard("analysis", user),
+            )
+        await callback.answer("Сохранено")
 
     @router.callback_query(F.data.startswith("set_frequency:"))
     async def set_frequency(callback: CallbackQuery) -> None:

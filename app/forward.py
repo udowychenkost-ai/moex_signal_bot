@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_ux import format_ai_idea_summary, format_historical_ai_analysis
 from app.config import Settings
-from app.domain import IdeaHorizon, IdeaStatus
+from app.domain import AnalysisMode, IdeaHorizon, IdeaStatus
 from app.idea_repository import OPEN_IDEA_STATUSES
 from app.liquidity import LiquidityAssessment, LiquidityService
 from app.liquidity_ux import format_liquidity_compact
@@ -34,6 +34,8 @@ from app.operations import (
     IdeaHistory,
     OperationalService,
     PeriodStatistics,
+    V24OpenIdea,
+    V24PeriodStatistics,
     realized_r,
 )
 from app.reporting import HORIZON_LABELS
@@ -104,7 +106,7 @@ def format_new_idea(
     ai_block = format_ai_idea_summary(idea)
     liquidity_block = format_liquidity_compact(liquidity)
     return (
-        "🔥 <b>СИЛЬНАЯ ИДЕЯ</b>\n🆕 НОВАЯ ИДЕЯ\n\n"
+        "🔵 <b>Классический</b>\n🔥 <b>СИЛЬНАЯ ИДЕЯ</b>\n🆕 НОВАЯ ИДЕЯ\n\n"
         f"ID: <code>{idea.id}</code>\n"
         f"{'📈' if idea.direction == 'BUY' else '📉'} <b>{idea.direction} — "
         f"{escape(idea.ticker)}</b> · {escape(idea.instrument_name)}\n\n"
@@ -163,7 +165,7 @@ def format_lifecycle_event(
     title = EVENT_TITLES.get(event.to_status, event.event_type)
     price = f"\nЦена события: <b>{event.price:.2f} ₽</b>" if event.price is not None else ""
     return (
-        f"🔔 <b>{title}</b>\n\n"
+        f"🔵 <b>Классический</b>\n🔔 <b>{title}</b>\n\n"
         f"ID: <code>{idea.id}</code>\n"
         f"Ticker: <b>{escape(idea.ticker)}</b>\n"
         f"Horizon: <b>{HORIZON_LABELS[idea.horizon]}</b>\n"
@@ -214,18 +216,38 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         return base
     v24 = status.v24
     kill_reasons = ", ".join(item.value for item in v24.kill_switch.reasons) or "нет"
+    liquidity_config = "CONFIGURED" if v24.liquidity_configured else "NOT CONFIGURED"
+    cost_config = "CONFIGURED" if v24.cost_configured else "NOT CONFIGURED"
     return (
         base
         + "\n\n<b>INTRADAY V2.4</b>\n"
-        + f"Mode: <b>{'ENABLED' if v24.enabled else 'DISABLED'}</b>\n"
+        + f"Legacy strategy: <b>{'ENABLED' if v24.legacy_enabled else 'DISABLED'}</b>\n"
+        + f"Intraday engine: <b>{'ENABLED' if v24.enabled else 'DISABLED'}</b>\n"
+        + f"Intraday shadow: <b>{'ENABLED' if v24.shadow_enabled else 'DISABLED'}</b>\n"
+        + "Production notifications: <b>"
+        + ("ENABLED" if v24.production_notification_enabled else "DISABLED")
+        + "</b>\n"
+        + f"Final Audit readiness: <b>{'READY' if v24.final_audit_ready else 'NOT READY'}</b>\n"
+        + "External context: <b>"
+        + ("AVAILABLE" if v24.external_context_ready else "DATA NOT AVAILABLE")
+        + "</b>\n"
         + f"Alembic: <b>{escape(v24.journal.revision or 'UNKNOWN')}</b>\n"
         + f"Gemini: <b>{escape(v24.gemini)}</b>\n"
         + f"Journal: <b>{'AVAILABLE' if v24.journal.available else 'ERROR'}</b>\n"
         + f"Data SLA: <b>{v24.data_sla.value}</b>\n"
         + f"Risk Budget: <b>{v24.risk_budget.value}</b>\n"
+        + f"Risk policy: <b>{escape(v24.risk_policy_version or 'NOT CONFIGURED')}</b>\n"
+        + f"Liquidity config: <b>{liquidity_config}</b>\n"
+        + f"Cost model: <b>{cost_config}</b>\n"
         + f"Statistical Admission: <b>{v24.statistical_admission.value}</b>\n"
         + f"Calibration: <b>{v24.calibration.value}</b>\n"
-        + f"Kill Switch: <b>{v24.kill_switch.state.value}</b>\n"
+        + "Kill Switch: <b>"
+        + (
+            "INACTIVE (NORMAL)"
+            if v24.kill_switch.state.value == "NORMAL"
+            else f"ACTIVE ({v24.kill_switch.state.value})"
+        )
+        + "</b>\n"
         + f"Kill reasons: <b>{escape(kill_reasons)}</b>\n"
         + f"MODEL / ACTUAL: <b>{v24.model_trade_count} / {v24.actual_trade_count}</b>\n"
         + f"Ambiguous execution: <b>{v24.ambiguous_execution_count}</b>\n"
@@ -237,6 +259,9 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         + escape(json.dumps(v24.microstructure_distribution, sort_keys=True))
         + "</b>\n"
         + f"Audit failures: <b>{escape(json.dumps(v24.audit_failure_reasons, sort_keys=True))}</b>"
+        + "\nLatest V2.4 scan: <b>"
+        + f"{_format_time(v24.latest_scan_at, timezone)} / {escape(v24.latest_scan_status)}</b>"
+        + f" · candidates {v24.latest_scan_candidates} · errors {v24.latest_scan_errors}"
     )
 
 
@@ -249,7 +274,7 @@ def _metric(value: float | None, *, suffix: str = "") -> str:
 
 
 def format_statistics(periods: tuple[PeriodStatistics, ...]) -> str:
-    sections = ["📊 <b>FORWARD STATISTICS</b>"]
+    sections = ["🔵 <b>Классический · FORWARD STATISTICS</b>"]
     for period in periods:
         sections.append(
             f"\n<b>{period.label}</b> · experiment <code>{escape(period.strategy_version)}</code>"
@@ -296,13 +321,68 @@ def format_statistics(periods: tuple[PeriodStatistics, ...]) -> str:
 def format_open_ideas(ideas: list[TradingIdea]) -> str:
     if not ideas:
         return "Ожидающих и активных идей сейчас нет."
-    lines = ["📋 <b>Текущие идеи</b>"]
+    lines = ["🔵 <b>Классический · текущие идеи</b>"]
     for idea in ideas:
         lines.append(
             f"<code>{idea.id}</code> · <b>{idea.direction} {escape(idea.ticker)}</b> · "
             f"{HORIZON_LABELS[idea.horizon]} · {idea.status} · {idea.confidence:.0f}%"
         )
     lines.append("\nПолная история: <code>/idea ID</code>")
+    return "\n".join(lines)
+
+
+def format_v24_statistics(periods: tuple[V24PeriodStatistics, ...]) -> str:
+    lines = ["⚡ <b>Intraday V2.4 · отдельная статистика</b>"]
+    for period in periods:
+        lines.append(f"\n<b>{escape(period.label)}</b>")
+        for label, metrics in (("MODEL", period.model), ("ACTUAL", period.actual)):
+            sample = " ⚠️ малая выборка" if metrics.n_trades < 30 else ""
+            win_rate = metrics.win_rate * 100 if metrics.win_rate is not None else None
+            lines.append(
+                f"<b>{label}</b>{sample}: closed {metrics.n_trades} · "
+                f"WR {_metric(win_rate, suffix='%')} · "
+                f"PF {_metric(metrics.profit_factor)} · "
+                f"Avg R {_metric(metrics.average_r)} · "
+                f"P&L {_metric(metrics.net_pl_rub, suffix=' ₽')}"
+            )
+    lines.append(
+        "\n<i>MODEL и ACTUAL не объединяются. Calibration использует только "
+        "calibration-eligible MODEL observations.</i>"
+    )
+    return "\n".join(lines)
+
+
+def format_v24_open_ideas(rows: tuple[V24OpenIdea, ...]) -> str:
+    if not rows:
+        return "⚡ <b>Intraday</b>\nТекущих pending/active идей нет."
+    lines = ["⚡ <b>Intraday · текущие идеи</b>"]
+    for row in rows:
+        lines.append(
+            f"<code>{escape(row.idea.trade_id)}</code> · "
+            f"<b>{escape(row.idea.direction)} {escape(row.idea.ticker)}</b> · "
+            f"{escape(row.status)} · {escape(row.idea.final_classification or 'UNCLASSIFIED')}"
+        )
+    lines.append("\nПолная карточка: <code>/actual TRADE_ID</code>")
+    return "\n".join(lines)
+
+
+def format_strategy_conflicts(legacy: list[TradingIdea], v24: tuple[V24OpenIdea, ...]) -> str:
+    legacy_by_ticker = {
+        item.ticker: "LONG" if item.direction == "BUY" else "SHORT" for item in legacy
+    }
+    conflicts = [
+        (item.idea.ticker, legacy_by_ticker[item.idea.ticker], item.idea.direction)
+        for item in v24
+        if item.idea.ticker in legacy_by_ticker
+        and legacy_by_ticker[item.idea.ticker] != item.idea.direction
+    ]
+    if not conflicts:
+        return ""
+    lines = ["⚠️ <b>Стратегии дают разные направления</b>"]
+    lines.extend(
+        f"{escape(ticker)} · Классический: <b>{classic}</b> · Intraday: <b>{intraday}</b>"
+        for ticker, classic, intraday in conflicts
+    )
     return "\n".join(lines)
 
 
@@ -532,6 +612,8 @@ class ForwardReportingService:
         counters = {"recipients": len(recipients), "sent": 0, "errors": 0}
         liquidity_cache: dict[int, LiquidityAssessment | None] = {}
         for telegram_id, user in recipients.items():
+            if user is not None and not AnalysisMode(user.analysis_mode).includes_legacy:
+                continue
             async with self.session_factory() as session:
                 sent_keys = set(
                     await session.scalars(
@@ -763,6 +845,8 @@ class ForwardReportingService:
         counters = {"recipients": len(recipients), "sent": 0, "errors": 0}
         for telegram_id in recipients:
             user = recipients[telegram_id]
+            if user is not None and not AnalysisMode(user.analysis_mode).includes_legacy:
+                continue
             if user is not None and not user.notify_daily_summary:
                 continue
             async with self.session_factory() as session:
@@ -800,7 +884,10 @@ class ForwardReportingService:
             )
             payload = format_daily_journal_summary(record)
             for telegram_id, user in recipients.items():
-                if user is not None and not user.notify_daily_summary:
+                if user is not None and (
+                    not AnalysisMode(user.analysis_mode).includes_v24
+                    or not user.notify_daily_summary
+                ):
                     continue
                 await self.v24_outbox.enqueue(
                     telegram_id=telegram_id,
@@ -835,6 +922,9 @@ class ForwardReportingService:
         recipients = await self._recipients()
         queued = 0
         for telegram_id in recipients:
+            user = recipients[telegram_id]
+            if user is not None and not AnalysisMode(user.analysis_mode).includes_v24:
+                continue
             queued += await self.v24_outbox.enqueue_market_summary_once(
                 telegram_id=telegram_id,
                 payload=payload,

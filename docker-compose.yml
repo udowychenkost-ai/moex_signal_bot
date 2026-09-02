@@ -25,13 +25,13 @@ services:
       context: .
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
-        APP_VERSION: ${APP_VERSION:-0.6.0}
+        APP_VERSION: ${APP_VERSION:-0.7.0}
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
-      APP_VERSION: ${APP_VERSION:-0.6.0}
+      APP_VERSION: ${APP_VERSION:-0.7.0}
     depends_on:
       postgres:
         condition: service_healthy
