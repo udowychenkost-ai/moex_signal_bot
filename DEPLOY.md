@@ -85,7 +85,7 @@ strategy-family markers, source fetch timestamps and snapshot policy-version
 references. Existing users are explicitly migrated to `LEGACY_ONLY`; legacy
 ideas remain `LEGACY`. No historical decision is rebuilt or deleted.
 
-The V2.4 orchestrator and admin risk-policy wizard are registered in 0.7.0, but
+The V2.4 orchestrator and admin risk-policy wizard are registered in 0.7.1, but
 production must still keep `INTRADAY_V24_ENABLED=false`. Public data and current
 configuration cannot yet satisfy every mandatory gate. Shadow processing is a
 separate opt-in and never permits Telegram publication.
@@ -125,7 +125,7 @@ today's request telemetry without exposing the API key.
 
 ## 4. Update and redeploy
 
-Before the 0.7.0 update, back up PostgreSQL as described below
+Before the 0.7.1 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -152,7 +152,7 @@ INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
 INTRADAY_V24_LEVERAGE_ENABLED=false
 ```
 
-Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. Version 0.7.0 has
+Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. Version 0.7.1 has
 the fail-closed integration code, but external data, approved Data SLA,
 liquidity/cost/opportunity settings, Risk Budget and calibration must pass the
 separate production checklist first.
@@ -163,7 +163,7 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.7.0/' .env
+sed -i 's/^APP_VERSION=.*/APP_VERSION=0.7.1/' .env
 sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
 sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
 if grep -q '^INTRADAY_V24_ENABLED=' .env; then

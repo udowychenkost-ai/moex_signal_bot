@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -13,7 +14,7 @@ from app.db import create_engine_and_session, init_db
 from app.journal import create_idea_journal
 from app.journal_health import JournalStorageHealth
 from app.kill_switch import KillSwitchStatus
-from app.models import DailyJournalSummaryV24, V24NotificationOutbox
+from app.models import DailyJournalSummaryV24, JobRunState, V24NotificationOutbox
 from app.observability_v24 import V24ObservabilityService
 from app.position_management_v24 import (
     OpenPositionInputs,
@@ -322,6 +323,27 @@ async def test_v24_observability_uses_real_persistence_and_no_fake_configuration
                     "gate_results": {"final_audit": {"gates": {"DATA_SLA": "FAIL", "DATA": "PASS"}}}
                 },
             )
+            session.add(
+                JobRunState(
+                    job_name="intraday_v24_cycle",
+                    started_at=NOW,
+                    finished_at=NOW,
+                    success=True,
+                    details=json.dumps(
+                        {
+                            "scan": {
+                                "candidates": 2,
+                                "missing_mtf": 1,
+                                "d1_h1_not_aligned": 14,
+                                "market_regime_direction_blocked": 3,
+                                "no_deterministic_setup": 2,
+                                "setup_detected": 3,
+                                "errors": 0,
+                            }
+                        }
+                    ),
+                )
+            )
         status = await V24ObservabilityService(Settings(_env_file=None), factory).status(now=NOW)
         assert not status.enabled
         assert status.journal.available
@@ -334,5 +356,11 @@ async def test_v24_observability_uses_real_persistence_and_no_fake_configuration
         assert status.microstructure_distribution == {"DATA_NOT_AVAILABLE": 1}
         assert status.journal_write_count == 1
         assert status.journal_error_count == 0
+        assert status.latest_scan_candidates == 2
+        assert status.latest_scan_missing_mtf == 1
+        assert status.latest_scan_d1_h1_not_aligned == 14
+        assert status.latest_scan_market_regime_direction_blocked == 3
+        assert status.latest_scan_no_deterministic_setup == 2
+        assert status.latest_scan_setup_detected == 3
     finally:
         await engine.dispose()

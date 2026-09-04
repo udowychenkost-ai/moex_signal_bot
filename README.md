@@ -62,14 +62,22 @@ sector peer coverage недостаточен, fundamental factor честно �
 
 ## INTRADAY V2.4 safety layer
 
-Version `0.7.0` completes the isolated `intraday_v2_4` application layer:
-one live/shadow orchestrator now composes the existing MTF, Data Integrity,
+Version `0.7.1` keeps the completed, isolated `intraday_v2_4` application layer
+and corrects evaluation ordering and pre-candidate observability only. One
+live/shadow orchestrator composes the existing MTF, Data Integrity,
 Data SLA, microstructure, liquidity, cost, risk, calibration, adversarial and
 Final Audit services. Its initial `DecisionSnapshotV24` and policy-version
 references are immutable; MODEL and explicitly confirmed ACTUAL trades remain
 separate and later changes use append-only events. Candidate claims and the
 Telegram outbox make scheduler retries idempotent. Alembic head is
 `20260902_0021`.
+
+V2.4 setup detection is now separate from permission to trade: an aligned
+D1/H1 setup is still identified under a blocking market regime, while the
+market-regime gate deterministically keeps it `NO_TRADE`. Scan/status
+diagnostics distinguish missing MTF data, D1/H1 mismatch, no deterministic
+setup, detected setup and a market-regime direction block. Version 0.7.1 does
+not relax any setup, regime, risk or qualification threshold.
 
 The safe deployment default is:
 

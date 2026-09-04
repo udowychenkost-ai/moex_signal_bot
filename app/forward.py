@@ -262,6 +262,13 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         + "\nLatest V2.4 scan: <b>"
         + f"{_format_time(v24.latest_scan_at, timezone)} / {escape(v24.latest_scan_status)}</b>"
         + f" · candidates {v24.latest_scan_candidates} · errors {v24.latest_scan_errors}"
+        + "\nV2.4 pre-candidate diagnostics: <b>"
+        + f"missing MTF {v24.latest_scan_missing_mtf} · "
+        + f"D1/H1 not aligned {v24.latest_scan_d1_h1_not_aligned} · "
+        + f"setup detected {v24.latest_scan_setup_detected} · "
+        + "market blocked "
+        + f"{v24.latest_scan_market_regime_direction_blocked} · "
+        + f"no deterministic setup {v24.latest_scan_no_deterministic_setup}</b>"
     )
 
 

@@ -4,6 +4,15 @@
 
 ### Added
 
+- V2.4/0.7.1 separates deterministic setup detection from market permission:
+  aligned setups remain observable under a blocking regime, but the unchanged
+  regime policy still forces `NO_TRADE` and prevents production qualification.
+- Added pre-candidate scan and `/status` counters for missing MTF data, D1/H1
+  mismatch, deterministic setup misses, detected setups and market-regime
+  direction blocks. Rejected pre-candidates still create no journal/model rows.
+- No setup, scoring, risk or qualification threshold was relaxed, no historical
+  record is rewritten, and production remains `INTRADAY_V24_ENABLED=false`.
+
 - V2.4/0.7.0 completes the final application integration without enabling
   production publication: `IntradayV24Orchestrator` composes the existing hard
   gates, verified-snapshot Gemini review, adversarial audit, immutable journal,

@@ -70,6 +70,11 @@ class V24RuntimeStatus:
     latest_scan_at: datetime | None = None
     latest_scan_status: str = "NEVER"
     latest_scan_candidates: int = 0
+    latest_scan_missing_mtf: int = 0
+    latest_scan_d1_h1_not_aligned: int = 0
+    latest_scan_market_regime_direction_blocked: int = 0
+    latest_scan_no_deterministic_setup: int = 0
+    latest_scan_setup_detected: int = 0
     latest_scan_errors: int = 0
 
 
@@ -260,6 +265,15 @@ class V24ObservabilityService:
                 else "NEVER"
             ),
             latest_scan_candidates=int(scan_result.get("candidates", 0) or 0),
+            latest_scan_missing_mtf=int(scan_result.get("missing_mtf", 0) or 0),
+            latest_scan_d1_h1_not_aligned=int(scan_result.get("d1_h1_not_aligned", 0) or 0),
+            latest_scan_market_regime_direction_blocked=int(
+                scan_result.get("market_regime_direction_blocked", 0) or 0
+            ),
+            latest_scan_no_deterministic_setup=int(
+                scan_result.get("no_deterministic_setup", 0) or 0
+            ),
+            latest_scan_setup_detected=int(scan_result.get("setup_detected", 0) or 0),
             latest_scan_errors=int(scan_result.get("errors", 0) or 0),
         )
         self.log(status)

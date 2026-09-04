@@ -4,7 +4,7 @@ This checklist intentionally separates code readiness from data, policy,
 calibration and publication readiness. A green implementation does not make a
 strategy safe to publish.
 
-## Current release state (0.7.0)
+## Current release state (0.7.1)
 
 | Readiness area | State | Evidence / blocker |
 |---|---|---|
@@ -15,6 +15,11 @@ strategy safe to publish.
 | CALIBRATION READY | NO | No statistically admitted V2.4 forward cohort exists yet. Ambiguous or unreliable model fills are excluded from calibration. |
 | PRODUCTION NOTIFICATION READY | NO | `INTRADAY_V24_ENABLED=false`; mandatory deterministic gates and Final Audit cannot currently pass reliably. |
 | STATISTICALLY QUALIFIED | NO | No approved OOS + forward sample satisfies the configured admission and reliability requirements. |
+
+Version 0.7.1 changes only evaluation ordering and observability. Deterministic
+setup detection now runs before the unchanged market-regime permission gate;
+blocked directions remain `NO_TRADE`. No numeric setup, scoring, risk or
+production-qualification threshold was relaxed.
 
 ## Implementation acceptance
 

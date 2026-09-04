@@ -35,7 +35,9 @@ from app.execution_v24 import (
     reassess_execution,
 )
 from app.final_audit import AuditAssessment, FinalAuditService
+from app.intraday_setup import D1_H1_NOT_ALIGNED_REASON
 from app.intraday_v24 import (
+    MARKET_REGIME_DIRECTION_BLOCKED_REASON,
     IntradayPipelineConfigV24,
     IntradayPipelineResultV24,
     IntradayPipelineV24,
@@ -208,6 +210,12 @@ class V24PersistResult:
     classification: str
 
 
+@dataclass(frozen=True, slots=True)
+class V24EvaluationOutcome:
+    decision: V24CandidateDecision | None
+    diagnostics: tuple[str, ...]
+
+
 class IntradayV24Orchestrator:
     """One fail-closed application service for v2.4 analysis, journal, model and outbox."""
 
@@ -282,12 +290,20 @@ class IntradayV24Orchestrator:
             "published": 0,
             "duplicates": 0,
             "rejected": 0,
+            "missing_mtf": 0,
+            "d1_h1_not_aligned": 0,
+            "market_regime_direction_blocked": 0,
+            "no_deterministic_setup": 0,
+            "setup_detected": 0,
             "errors": 0,
             "rejection_reasons": {},
         }
         for instrument in instruments:
             try:
-                decision = await self.evaluate_instrument(instrument, as_of=checked_at)
+                outcome = await self._evaluate_instrument(instrument, as_of=checked_at)
+                for diagnostic in outcome.diagnostics:
+                    counters[diagnostic] += 1
+                decision = outcome.decision
                 if decision is None:
                     continue
                 counters["candidates"] += 1
@@ -306,7 +322,9 @@ class IntradayV24Orchestrator:
                 logger.exception("v24 candidate failed ticker=%s", instrument.secid)
         logger.info(
             "v24 scan completed checked=%s candidates=%s journaled=%s model=%s "
-            "published=%s duplicates=%s rejected=%s errors=%s",
+            "published=%s duplicates=%s rejected=%s missing_mtf=%s "
+            "d1_h1_not_aligned=%s market_regime_direction_blocked=%s "
+            "no_deterministic_setup=%s setup_detected=%s errors=%s",
             counters["checked"],
             counters["candidates"],
             counters["journaled"],
@@ -314,6 +332,11 @@ class IntradayV24Orchestrator:
             counters["published"],
             counters["duplicates"],
             counters["rejected"],
+            counters["missing_mtf"],
+            counters["d1_h1_not_aligned"],
+            counters["market_regime_direction_blocked"],
+            counters["no_deterministic_setup"],
+            counters["setup_detected"],
             counters["errors"],
         )
         return counters
@@ -426,10 +449,16 @@ class IntradayV24Orchestrator:
     async def evaluate_instrument(
         self, instrument: Instrument, *, as_of: datetime
     ) -> V24CandidateDecision | None:
+        outcome = await self._evaluate_instrument(instrument, as_of=as_of)
+        return outcome.decision
+
+    async def _evaluate_instrument(
+        self, instrument: Instrument, *, as_of: datetime
+    ) -> V24EvaluationOutcome:
         candles, benchmark, book = await self._load_market_data(instrument.secid)
         required = {"1d", "1h", "15m", "5m"}
         if any(not candles.get(item) or not benchmark.get(item) for item in required):
-            return None
+            return V24EvaluationOutcome(decision=None, diagnostics=("missing_mtf",))
         context = await self.external_context.context_for(instrument, as_of=as_of)
         pipeline = self.pipeline.analyze(
             echelon=instrument.echelon,
@@ -440,7 +469,19 @@ class IntradayV24Orchestrator:
             execution_1m_quality_pass=False,
         )
         if pipeline.setup.direction is None or pipeline.setup.setup_type is SetupType.UNKNOWN:
-            return None
+            diagnostic = (
+                "d1_h1_not_aligned"
+                if D1_H1_NOT_ALIGNED_REASON in pipeline.setup.evidence
+                else "no_deterministic_setup"
+            )
+            return V24EvaluationOutcome(decision=None, diagnostics=(diagnostic,))
+        diagnostics = ["setup_detected"]
+        if any(
+            reason.startswith(f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:")
+            for reason in pipeline.no_trade_reasons
+        ):
+            diagnostics.append("market_regime_direction_blocked")
+            return V24EvaluationOutcome(decision=None, diagnostics=tuple(diagnostics))
         direction = pipeline.setup.direction
         five = pipeline.snapshots["5m"]
         source = candles["5m"][-1]
@@ -982,37 +1023,40 @@ class IntradayV24Orchestrator:
             "data_sla_at_entry": sla.result.value,
             "notes": "SHADOW" if not self.settings.intraday_v24_enabled else "FORWARD",
         }
-        return V24CandidateDecision(
-            candidate_key=candidate_key,
-            signal_datetime=five.as_of,
-            ticker=instrument.secid,
-            direction=direction,
-            pipeline=pipeline,
-            entry_plan=entry_plan,
-            target=target,
-            gate_results=preliminary,
-            gate_details=gate_details,
-            audit=audit,
-            final_decision=final_decision,
-            classification=classification,
-            calibration=calibration,
-            ai_review=ai_review,
-            journal_values=journal_values,
-            snapshot_values=snapshot_values,
-            model_values=model_values,
-            model_eligible=(
-                entry_plan.optimal_entry is not None
-                and entry_plan.initial_stop is not None
-                and target is not None
-                and classification
-                in {
-                    V24Classification.PRODUCTION_QUALIFIED,
-                    V24Classification.STATISTICALLY_QUALIFIED_70,
-                    V24Classification.STRUCTURALLY_QUALIFIED,
-                    V24Classification.SHADOW,
-                    V24Classification.MODEL_CANDIDATE,
-                }
+        return V24EvaluationOutcome(
+            decision=V24CandidateDecision(
+                candidate_key=candidate_key,
+                signal_datetime=five.as_of,
+                ticker=instrument.secid,
+                direction=direction,
+                pipeline=pipeline,
+                entry_plan=entry_plan,
+                target=target,
+                gate_results=preliminary,
+                gate_details=gate_details,
+                audit=audit,
+                final_decision=final_decision,
+                classification=classification,
+                calibration=calibration,
+                ai_review=ai_review,
+                journal_values=journal_values,
+                snapshot_values=snapshot_values,
+                model_values=model_values,
+                model_eligible=(
+                    entry_plan.optimal_entry is not None
+                    and entry_plan.initial_stop is not None
+                    and target is not None
+                    and classification
+                    in {
+                        V24Classification.PRODUCTION_QUALIFIED,
+                        V24Classification.STATISTICALLY_QUALIFIED_70,
+                        V24Classification.STRUCTURALLY_QUALIFIED,
+                        V24Classification.SHADOW,
+                        V24Classification.MODEL_CANDIDATE,
+                    }
+                ),
             ),
+            diagnostics=tuple(diagnostics),
         )
 
     async def persist_decision(self, decision: V24CandidateDecision) -> V24PersistResult:

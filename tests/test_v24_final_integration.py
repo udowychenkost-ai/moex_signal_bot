@@ -14,12 +14,23 @@ from app.domain import AnalysisMode, StrategyFamily
 from app.execution_v24 import EntryPlanV24
 from app.final_audit import FinalAuditService
 from app.forward import format_strategy_conflicts
+from app.intraday_setup import (
+    D1_H1_NOT_ALIGNED_REASON,
+    NO_DETERMINISTIC_SETUP_REASON,
+    SetupDetection,
+)
+from app.intraday_v24 import (
+    MARKET_REGIME_DIRECTION_BLOCKED_REASON,
+    IntradayPipelineResultV24,
+)
 from app.journal import create_actual_trade, create_idea_journal, create_model_trade
+from app.market_regime_v24 import MarketRegimeAssessmentV24
 from app.models import (
     ActualTradeJournal,
     DecisionSnapshotV24,
     IdeaJournal,
     Instrument,
+    ModelTradeJournal,
     PaperTrade,
     RiskBudgetSetting,
     TelegramUser,
@@ -28,7 +39,11 @@ from app.models import (
 )
 from app.observation import DataFreshnessGuard
 from app.operations import OperationalService
-from app.orchestrator_v24 import IntradayV24Orchestrator, V24CandidateDecision
+from app.orchestrator_v24 import (
+    IntradayV24Orchestrator,
+    V24CandidateDecision,
+    V24EvaluationOutcome,
+)
 from app.reporting import ReportingService
 from app.repositories import ensure_user, update_user_settings
 from app.risk_policy_admin import (
@@ -43,12 +58,17 @@ from app.v24_domain import (
     AuditGateResult,
     CalculationReliability,
     CalibrationStatus,
+    EventStateV24,
     FinalDecision,
     JournalDirection,
     KillSwitchReason,
+    MarketBiasV24,
+    MarketTrendRegime,
     ProbabilityStatus,
+    SetupType,
     StatisticalAdmissionStatus,
     V24Classification,
+    VolatilityStateV24,
 )
 
 NOW = datetime(2026, 9, 2, 10, 30, tzinfo=UTC)
@@ -249,6 +269,159 @@ async def test_disabled_system_flag_overrides_v24_user_selection(tmp_path: Path)
         assert result.created and result.notifications_queued == 0
         async with factory() as session:
             assert await session.scalar(select(func.count()).select_from(IdeaJournal)) == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, engine, factory = await database(tmp_path, "scan-diagnostics.db")
+    orchestrator = IntradayV24Orchestrator(
+        Settings(
+            _env_file=None,
+            intraday_v24_enabled=False,
+            intraday_v24_shadow_enabled=True,
+        ),
+        factory,
+    )
+    try:
+        await initialize_normal_kill(orchestrator)
+        async with factory() as session, session.begin():
+            for ticker in ("ERR", "MARKET", "MISMATCH", "MISSING", "NOSETUP"):
+                session.add(
+                    Instrument(
+                        secid=ticker,
+                        short_name=ticker,
+                        lot_size=10,
+                        echelon=1,
+                        is_active=True,
+                    )
+                )
+
+        async def evaluate_stub(instrument: Instrument, *, as_of: datetime):
+            del as_of
+            if instrument.secid == "ERR":
+                raise RuntimeError("diagnostic test")
+            if instrument.secid == "MARKET":
+                return V24EvaluationOutcome(
+                    decision=None,
+                    diagnostics=("setup_detected", "market_regime_direction_blocked"),
+                )
+            diagnostic = {
+                "MISMATCH": "d1_h1_not_aligned",
+                "MISSING": "missing_mtf",
+                "NOSETUP": "no_deterministic_setup",
+            }[instrument.secid]
+            return V24EvaluationOutcome(decision=None, diagnostics=(diagnostic,))
+
+        monkeypatch.setattr(orchestrator, "_evaluate_instrument", evaluate_stub)
+        result = await orchestrator.scan(as_of=NOW)
+
+        assert result["checked"] == 5
+        assert result["candidates"] == 0
+        assert result["missing_mtf"] == 1
+        assert result["d1_h1_not_aligned"] == 1
+        assert result["market_regime_direction_blocked"] == 1
+        assert result["no_deterministic_setup"] == 1
+        assert result["setup_detected"] == 1
+        assert result["errors"] == 1
+        async with factory() as session:
+            assert await session.scalar(select(func.count()).select_from(IdeaJournal)) == 0
+            assert await session.scalar(select(func.count()).select_from(ModelTradeJournal)) == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("setup", "reasons", "expected_diagnostics"),
+    [
+        (
+            SetupDetection(
+                SetupType.UNKNOWN,
+                None,
+                NOW,
+                (D1_H1_NOT_ALIGNED_REASON,),
+                None,
+                ("1d", "1h", "15m", "5m"),
+            ),
+            (D1_H1_NOT_ALIGNED_REASON,),
+            ("d1_h1_not_aligned",),
+        ),
+        (
+            SetupDetection(
+                SetupType.UNKNOWN,
+                None,
+                NOW,
+                (NO_DETERMINISTIC_SETUP_REASON,),
+                None,
+                ("1d", "1h", "15m", "5m"),
+            ),
+            (NO_DETERMINISTIC_SETUP_REASON,),
+            ("no_deterministic_setup",),
+        ),
+        (
+            SetupDetection(
+                SetupType.BREAKOUT_RETEST,
+                JournalDirection.LONG,
+                NOW,
+                ("D1 and H1 trend aligned LONG", "market regime RANGE"),
+                95.0,
+                ("1h", "15m", "5m"),
+            ),
+            (f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:market=RANGE:direction=LONG",),
+            ("setup_detected", "market_regime_direction_blocked"),
+        ),
+    ],
+)
+async def test_orchestrator_rejects_pre_candidates_with_specific_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup: SetupDetection,
+    reasons: tuple[str, ...],
+    expected_diagnostics: tuple[str, ...],
+) -> None:
+    _, engine, factory = await database(tmp_path, f"pre-{setup.evidence[-1]}.db")
+    orchestrator = IntradayV24Orchestrator(Settings(_env_file=None), factory)
+    market = MarketRegimeAssessmentV24(
+        regime=MarketTrendRegime.RANGE,
+        volatility=VolatilityStateV24.NORMAL_VOL,
+        event_state=EventStateV24.NORMAL,
+        bias=MarketBiasV24.NEUTRAL,
+        as_of=NOW,
+        ema20=100,
+        ema50=100,
+        return_20_pct=0,
+        realized_volatility=0.01,
+        volatility_percentile=50,
+        reasons=(),
+    )
+    pipeline = IntradayPipelineResultV24(
+        strategy_version="intraday_v2_4",
+        snapshots={},
+        market=market,
+        setup=setup,
+        no_trade=True,
+        no_trade_reasons=reasons,
+        maximum_holding_trading_days=2,
+        leverage_enabled=False,
+    )
+
+    async def market_data(_ticker: str):
+        frames = {timeframe: [object()] for timeframe in ("1d", "1h", "15m", "5m")}
+        return frames, frames, []
+
+    try:
+        monkeypatch.setattr(orchestrator, "_load_market_data", market_data)
+        monkeypatch.setattr(orchestrator.pipeline, "analyze", lambda **_kwargs: pipeline)
+        outcome = await orchestrator._evaluate_instrument(
+            Instrument(secid="SBER", short_name="Сбербанк", echelon=1),
+            as_of=NOW,
+        )
+
+        assert outcome.decision is None
+        assert outcome.diagnostics == expected_diagnostics
     finally:
         await engine.dispose()
 

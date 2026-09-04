@@ -17,6 +17,8 @@ from app.market_regime_v24 import (
 )
 from app.v24_domain import STRATEGY_VERSION_V24, EventStateV24, SetupType
 
+MARKET_REGIME_DIRECTION_BLOCKED_REASON = "MARKET_REGIME_DIRECTION_BLOCKED"
+
 
 @dataclass(frozen=True, slots=True)
 class IntradayPipelineConfigV24:
@@ -111,6 +113,11 @@ class IntradayPipelineV24:
         reasons: list[str] = []
         if setup.setup_type is SetupType.UNKNOWN or setup.direction is None:
             reasons.extend(setup.evidence[-1:])
+        elif not market.allows_direction(setup.direction):
+            reasons.append(
+                f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:"
+                f"market={market.regime.value}:direction={setup.direction.value}"
+            )
         if self.config.leverage_enabled:
             reasons.append("LEVERAGE_ENABLED_IS_NOT_ALLOWED_FOR_PRODUCTION_V2_4")
         if event_state is EventStateV24.DATA_NOT_AVAILABLE:

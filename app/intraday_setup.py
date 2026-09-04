@@ -13,6 +13,8 @@ from app.v24_domain import (
 )
 
 REQUIRED_INTRADAY_TIMEFRAMES = ("1d", "1h", "15m", "5m")
+D1_H1_NOT_ALIGNED_REASON = "D1_H1_NOT_ALIGNED"
+NO_DETERMINISTIC_SETUP_REASON = "NO_DETERMINISTIC_SETUP"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,23 +124,11 @@ class SetupClassifierV24:
                 setup_type=SetupType.UNKNOWN,
                 direction=None,
                 detected_at=detected_at,
-                evidence=("D1/H1 trend is not aligned",),
+                evidence=(D1_H1_NOT_ALIGNED_REASON,),
                 invalidation=None,
                 relevant_timeframes=REQUIRED_INTRADAY_TIMEFRAMES,
             )
         direction = daily_direction
-        if not market.allows_direction(direction):
-            return SetupDetection(
-                setup_type=SetupType.UNKNOWN,
-                direction=None,
-                detected_at=detected_at,
-                evidence=(
-                    "Countertrend blocked: "
-                    f"market={market.regime.value} direction={direction.value}",
-                ),
-                invalidation=None,
-                relevant_timeframes=REQUIRED_INTRADAY_TIMEFRAMES,
-            )
 
         is_long = direction is JournalDirection.LONG
         expected_breakout = "UP" if is_long else "DOWN"
@@ -248,7 +238,7 @@ class SetupClassifierV24:
                         relevant = ("1d", "1h", "15m")
 
         if setup is SetupType.UNKNOWN:
-            evidence.append("No deterministic v2.4 setup matched")
+            evidence.append(NO_DETERMINISTIC_SETUP_REASON)
             direction_result: JournalDirection | None = None
         else:
             direction_result = direction

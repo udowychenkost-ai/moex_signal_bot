@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import app.intraday_v24 as intraday_v24_module
 from app.config import Settings
 from app.domain import CandleData
 from app.execution_v24 import (
@@ -16,9 +17,13 @@ from app.execution_v24 import (
     build_entry_plan,
     reassess_execution,
 )
-from app.intraday_setup import SetupClassifierV24
+from app.intraday_setup import (
+    D1_H1_NOT_ALIGNED_REASON,
+    NO_DETERMINISTIC_SETUP_REASON,
+    SetupClassifierV24,
+)
 from app.intraday_technical import analyze_intraday_technical
-from app.intraday_v24 import IntradayPipelineV24
+from app.intraday_v24 import MARKET_REGIME_DIRECTION_BLOCKED_REASON, IntradayPipelineV24
 from app.market_regime_v24 import MarketRegimeAssessmentV24, analyze_market_regime_v24
 from app.model_execution_v24 import (
     ModelExecutionRequest,
@@ -191,50 +196,161 @@ def _market(regime: MarketTrendRegime) -> MarketRegimeAssessmentV24:
     )
 
 
-def test_setup_classifier_is_deterministic_and_blocks_countertrend() -> None:
+def _setup_snapshots(
+    direction: JournalDirection,
+    *,
+    aligned: bool = True,
+    breakout_retest: bool = True,
+):
     base = analyze_intraday_technical(
         _intraday_candles(),
         timeframe="5m",
         benchmark_candles=_intraday_candles(ticker="IMOEX"),
     )
+    is_long = direction is JournalDirection.LONG
     trend = replace(
         base,
-        current_price=110,
-        previous_close=109,
-        ema20=105,
+        current_price=110 if is_long else 90,
+        previous_close=109 if is_long else 91,
+        ema20=105 if is_long else 95,
         ema50=100,
-        structure_state=StructureState.HH_HL,
+        structure_state=StructureState.HH_HL if is_long else StructureState.LH_LL,
+    )
+    opposite = replace(
+        trend,
+        current_price=90 if is_long else 110,
+        ema20=95 if is_long else 105,
+        ema50=100,
+        structure_state=StructureState.LH_LL if is_long else StructureState.HH_HL,
     )
     trigger = replace(
         trend,
         timeframe="15m",
-        breakout_state=BreakoutState.RETEST,
-        breakout_direction="UP",
-        breakout_level=108,
+        breakout_state=BreakoutState.RETEST if breakout_retest else BreakoutState.NONE,
+        breakout_direction=("UP" if is_long else "DOWN") if breakout_retest else None,
+        breakout_level=(108 if is_long else 92) if breakout_retest else None,
+        compression_ratio=None,
+        expansion_ratio=None,
+        session_vwap=None,
+        atr=1,
+        relative_strength_pct=(1 if is_long else -1) if breakout_retest else 0,
     )
     execution = replace(
         trend,
         timeframe="5m",
+        previous_close=trend.current_price if not breakout_retest else trend.previous_close,
         opening_range_high=None,
         opening_range_low=None,
+        previous_day_high=150,
+        previous_day_low=50,
+        compression_ratio=None,
+        expansion_ratio=None,
+        volume_confirmed=False,
+        atr=1,
     )
-    snapshots = {"1d": trend, "1h": trend, "15m": trigger, "5m": execution}
+    return {
+        "1d": trend,
+        "1h": trend if aligned else opposite,
+        "15m": trigger,
+        "5m": execution,
+    }
+
+
+def _run_pipeline_with_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+    snapshots,
+    market: MarketRegimeAssessmentV24,
+):
+    monkeypatch.setattr(
+        intraday_v24_module,
+        "analyze_intraday_technical",
+        lambda _candles, *, timeframe, **_kwargs: snapshots[timeframe],
+    )
+    monkeypatch.setattr(
+        intraday_v24_module,
+        "analyze_market_regime_v24",
+        lambda *_args, **_kwargs: market,
+    )
+    frames = {timeframe: [object()] for timeframe in ("1d", "1h", "15m", "5m")}
+    return IntradayPipelineV24().analyze(
+        echelon=1,
+        candles_by_timeframe=frames,
+        benchmark_by_timeframe=frames,
+        event_state=EventStateV24.NORMAL,
+        as_of=NOW,
+    )
+
+
+@pytest.mark.parametrize("direction", [JournalDirection.LONG, JournalDirection.SHORT])
+def test_range_preserves_detected_setup_but_pipeline_remains_no_trade(
+    monkeypatch: pytest.MonkeyPatch,
+    direction: JournalDirection,
+) -> None:
+    snapshots = _setup_snapshots(direction)
+    market = _market(MarketTrendRegime.RANGE)
 
     detected = SetupClassifierV24().classify(
         snapshots,
-        _market(MarketTrendRegime.UPTREND),
+        market,
     )
-    blocked = SetupClassifierV24().classify(
-        snapshots,
-        _market(MarketTrendRegime.DOWNTREND),
-    )
+    result = _run_pipeline_with_snapshots(monkeypatch, snapshots, market)
 
     assert detected.setup_type is SetupType.BREAKOUT_RETEST
-    assert detected.direction is JournalDirection.LONG
+    assert detected.direction is direction
     assert detected.invalidation is not None
-    assert blocked.setup_type is SetupType.UNKNOWN
-    assert blocked.direction is None
-    assert "Countertrend blocked" in blocked.evidence[0]
+    assert result.setup.setup_type is SetupType.BREAKOUT_RETEST
+    assert result.setup.direction is direction
+    assert result.no_trade is True
+    assert (
+        f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:market=RANGE:direction={direction.value}"
+    ) in result.no_trade_reasons
+
+
+def test_d1_h1_mismatch_remains_unknown_with_diagnostic_reason() -> None:
+    detected = SetupClassifierV24().classify(
+        _setup_snapshots(JournalDirection.LONG, aligned=False),
+        _market(MarketTrendRegime.UPTREND),
+    )
+
+    assert detected.setup_type is SetupType.UNKNOWN
+    assert detected.direction is None
+    assert detected.evidence == (D1_H1_NOT_ALIGNED_REASON,)
+
+
+def test_allowed_regime_keeps_valid_setup_behavior_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = _setup_snapshots(JournalDirection.LONG)
+    result = _run_pipeline_with_snapshots(
+        monkeypatch,
+        snapshots,
+        _market(MarketTrendRegime.UPTREND),
+    )
+
+    assert result.setup.setup_type is SetupType.BREAKOUT_RETEST
+    assert result.setup.direction is JournalDirection.LONG
+    assert result.no_trade is False
+    assert result.no_trade_reasons == ()
+
+
+def test_range_without_matching_setup_is_not_counted_as_market_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = _setup_snapshots(JournalDirection.LONG, breakout_retest=False)
+    result = _run_pipeline_with_snapshots(
+        monkeypatch,
+        snapshots,
+        _market(MarketTrendRegime.RANGE),
+    )
+
+    assert result.setup.setup_type is SetupType.UNKNOWN
+    assert result.setup.direction is None
+    assert result.no_trade is True
+    assert result.no_trade_reasons == (NO_DETERMINISTIC_SETUP_REASON,)
+    assert not any(
+        reason.startswith(MARKET_REGIME_DIRECTION_BLOCKED_REASON)
+        for reason in result.no_trade_reasons
+    )
 
 
 def test_intraday_pipeline_excludes_third_echelon_and_gates_unknown_event_context() -> None:
