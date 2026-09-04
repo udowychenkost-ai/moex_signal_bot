@@ -4,6 +4,17 @@
 
 ### Added
 
+- V2.4/0.7.2 adds compact per-ticker pre-candidate diagnostics to the existing
+  scan `JobRunState.details` payload. Each outcome records only ticker,
+  D1/H1 directions, regime and detected setup/direction; no candles,
+  indicators, prompts or secrets are retained.
+- `/status` now shows at most five detected or market-blocked V2.4 setups and
+  keeps all aggregate v0.7.1 counters unchanged. Diagnostics alone never create
+  `IdeaJournal` or `ModelTrade` rows.
+- This release is observability-only: strategy logic, thresholds, alignment,
+  market permission and qualification are unchanged; production remains
+  `INTRADAY_V24_ENABLED=false`.
+
 - V2.4/0.7.1 separates deterministic setup detection from market permission:
   aligned setups remain observable under a blocking regime, but the unchanged
   regime policy still forces `NO_TRADE` and prevents production qualification.

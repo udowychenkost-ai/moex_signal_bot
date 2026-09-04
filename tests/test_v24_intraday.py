@@ -297,6 +297,8 @@ def test_range_preserves_detected_setup_but_pipeline_remains_no_trade(
 
     assert detected.setup_type is SetupType.BREAKOUT_RETEST
     assert detected.direction is direction
+    assert detected.daily_direction is direction
+    assert detected.hourly_direction is direction
     assert detected.invalidation is not None
     assert result.setup.setup_type is SetupType.BREAKOUT_RETEST
     assert result.setup.direction is direction
@@ -314,6 +316,8 @@ def test_d1_h1_mismatch_remains_unknown_with_diagnostic_reason() -> None:
 
     assert detected.setup_type is SetupType.UNKNOWN
     assert detected.direction is None
+    assert detected.daily_direction is JournalDirection.LONG
+    assert detected.hourly_direction is JournalDirection.SHORT
     assert detected.evidence == (D1_H1_NOT_ALIGNED_REASON,)
 
 

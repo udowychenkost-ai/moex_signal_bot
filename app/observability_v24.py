@@ -34,6 +34,12 @@ from app.v24_domain import (
 
 logger = logging.getLogger(__name__)
 
+_INTERESTING_SETUP_OUTCOMES = {
+    "SETUP_DETECTED",
+    "MARKET_REGIME_DIRECTION_BLOCKED",
+}
+_MAX_STATUS_SETUP_DIAGNOSTICS = 5
+
 
 @dataclass(frozen=True, slots=True)
 class V24RuntimeStatus:
@@ -75,6 +81,7 @@ class V24RuntimeStatus:
     latest_scan_market_regime_direction_blocked: int = 0
     latest_scan_no_deterministic_setup: int = 0
     latest_scan_setup_detected: int = 0
+    latest_scan_setups: tuple[dict[str, str | None], ...] = ()
     latest_scan_errors: int = 0
 
 
@@ -164,6 +171,33 @@ class V24ObservabilityService:
         scan_result = scan_details.get("scan", scan_details)
         if not isinstance(scan_result, dict):
             scan_result = {}
+        ticker_diagnostics = scan_result.get("ticker_diagnostics", [])
+        latest_scan_setups: list[dict[str, str | None]] = []
+        if isinstance(ticker_diagnostics, list):
+            for item in ticker_diagnostics:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("outcome") not in _INTERESTING_SETUP_OUTCOMES
+                ):
+                    continue
+                latest_scan_setups.append(
+                    {
+                        key: value if isinstance(value, str) else None
+                        for key, value in item.items()
+                        if key
+                        in {
+                            "ticker",
+                            "outcome",
+                            "daily_direction",
+                            "hourly_direction",
+                            "market_regime",
+                            "setup_type",
+                            "setup_direction",
+                        }
+                    }
+                )
+                if len(latest_scan_setups) >= _MAX_STATUS_SETUP_DIAGNOSTICS:
+                    break
         liquidity_configured = (
             LiquidityModelConfig.from_settings(self.settings).status
             is ConfigurationStatus.CONFIGURED
@@ -274,6 +308,7 @@ class V24ObservabilityService:
                 scan_result.get("no_deterministic_setup", 0) or 0
             ),
             latest_scan_setup_detected=int(scan_result.get("setup_detected", 0) or 0),
+            latest_scan_setups=tuple(latest_scan_setups),
             latest_scan_errors=int(scan_result.get("errors", 0) or 0),
         )
         self.log(status)

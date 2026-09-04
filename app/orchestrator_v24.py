@@ -211,9 +211,46 @@ class V24PersistResult:
 
 
 @dataclass(frozen=True, slots=True)
+class V24TickerDiagnostic:
+    ticker: str
+    outcome: str
+    daily_direction: str | None = None
+    hourly_direction: str | None = None
+    market_regime: str | None = None
+    setup_type: str | None = None
+    setup_direction: str | None = None
+
+
+def _ticker_diagnostic(
+    ticker: str,
+    outcome: str,
+    pipeline: IntradayPipelineResultV24 | None = None,
+) -> V24TickerDiagnostic:
+    setup = pipeline.setup if pipeline is not None else None
+    return V24TickerDiagnostic(
+        ticker=ticker,
+        outcome=outcome,
+        daily_direction=(
+            setup.daily_direction.value if setup is not None and setup.daily_direction else None
+        ),
+        hourly_direction=(
+            setup.hourly_direction.value if setup is not None and setup.hourly_direction else None
+        ),
+        market_regime=pipeline.market.regime.value if pipeline is not None else None,
+        setup_type=(
+            setup.setup_type.value
+            if setup is not None and setup.setup_type is not SetupType.UNKNOWN
+            else None
+        ),
+        setup_direction=setup.direction.value if setup is not None and setup.direction else None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class V24EvaluationOutcome:
     decision: V24CandidateDecision | None
     diagnostics: tuple[str, ...]
+    ticker_diagnostic: V24TickerDiagnostic
 
 
 class IntradayV24Orchestrator:
@@ -297,12 +334,17 @@ class IntradayV24Orchestrator:
             "setup_detected": 0,
             "errors": 0,
             "rejection_reasons": {},
+            "ticker_diagnostics": [],
         }
+        ticker_diagnostics: list[dict[str, str | None]] = counters["ticker_diagnostics"]
         for instrument in instruments:
+            diagnostic_index: int | None = None
             try:
                 outcome = await self._evaluate_instrument(instrument, as_of=checked_at)
                 for diagnostic in outcome.diagnostics:
                     counters[diagnostic] += 1
+                diagnostic_index = len(ticker_diagnostics)
+                ticker_diagnostics.append(asdict(outcome.ticker_diagnostic))
                 decision = outcome.decision
                 if decision is None:
                     continue
@@ -319,6 +361,15 @@ class IntradayV24Orchestrator:
                         reasons[gate.value] = int(reasons.get(gate.value, 0)) + 1
             except Exception:
                 counters["errors"] += 1
+                error_diagnostic = _ticker_diagnostic(instrument.secid, "ERROR")
+                if diagnostic_index is None:
+                    ticker_diagnostics.append(asdict(error_diagnostic))
+                else:
+                    previous = ticker_diagnostics[diagnostic_index]
+                    ticker_diagnostics[diagnostic_index] = {
+                        **previous,
+                        "outcome": error_diagnostic.outcome,
+                    }
                 logger.exception("v24 candidate failed ticker=%s", instrument.secid)
         logger.info(
             "v24 scan completed checked=%s candidates=%s journaled=%s model=%s "
@@ -458,7 +509,11 @@ class IntradayV24Orchestrator:
         candles, benchmark, book = await self._load_market_data(instrument.secid)
         required = {"1d", "1h", "15m", "5m"}
         if any(not candles.get(item) or not benchmark.get(item) for item in required):
-            return V24EvaluationOutcome(decision=None, diagnostics=("missing_mtf",))
+            return V24EvaluationOutcome(
+                decision=None,
+                diagnostics=("missing_mtf",),
+                ticker_diagnostic=_ticker_diagnostic(instrument.secid, "MISSING_MTF"),
+            )
         context = await self.external_context.context_for(instrument, as_of=as_of)
         pipeline = self.pipeline.analyze(
             echelon=instrument.echelon,
@@ -474,14 +529,31 @@ class IntradayV24Orchestrator:
                 if D1_H1_NOT_ALIGNED_REASON in pipeline.setup.evidence
                 else "no_deterministic_setup"
             )
-            return V24EvaluationOutcome(decision=None, diagnostics=(diagnostic,))
+            outcome = (
+                "D1_H1_NOT_ALIGNED"
+                if diagnostic == "d1_h1_not_aligned"
+                else "NO_DETERMINISTIC_SETUP"
+            )
+            return V24EvaluationOutcome(
+                decision=None,
+                diagnostics=(diagnostic,),
+                ticker_diagnostic=_ticker_diagnostic(instrument.secid, outcome, pipeline),
+            )
         diagnostics = ["setup_detected"]
         if any(
             reason.startswith(f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:")
             for reason in pipeline.no_trade_reasons
         ):
             diagnostics.append("market_regime_direction_blocked")
-            return V24EvaluationOutcome(decision=None, diagnostics=tuple(diagnostics))
+            return V24EvaluationOutcome(
+                decision=None,
+                diagnostics=tuple(diagnostics),
+                ticker_diagnostic=_ticker_diagnostic(
+                    instrument.secid,
+                    "MARKET_REGIME_DIRECTION_BLOCKED",
+                    pipeline,
+                ),
+            )
         direction = pipeline.setup.direction
         five = pipeline.snapshots["5m"]
         source = candles["5m"][-1]
@@ -1057,6 +1129,7 @@ class IntradayV24Orchestrator:
                 ),
             ),
             diagnostics=tuple(diagnostics),
+            ticker_diagnostic=_ticker_diagnostic(instrument.secid, "SETUP_DETECTED", pipeline),
         )
 
     async def persist_decision(self, decision: V24CandidateDecision) -> V24PersistResult:

@@ -218,6 +218,22 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
     kill_reasons = ", ".join(item.value for item in v24.kill_switch.reasons) or "нет"
     liquidity_config = "CONFIGURED" if v24.liquidity_configured else "NOT CONFIGURED"
     cost_config = "CONFIGURED" if v24.cost_configured else "NOT CONFIGURED"
+    setup_lines = []
+    for item in v24.latest_scan_setups:
+        state = (
+            "BLOCKED" if item.get("outcome") == "MARKET_REGIME_DIRECTION_BLOCKED" else "DETECTED"
+        )
+        setup_lines.append(
+            " · ".join(
+                escape(item.get(key) or "n/a")
+                for key in ("ticker", "setup_type", "setup_direction", "market_regime")
+            )
+            + f" · {state}"
+        )
+    omitted_setups = max(0, v24.latest_scan_setup_detected - len(setup_lines))
+    if omitted_setups:
+        setup_lines.append(f"… и ещё {omitted_setups}")
+    setup_status = "\n".join(setup_lines) if setup_lines else "<b>нет</b>"
     return (
         base
         + "\n\n<b>INTRADAY V2.4</b>\n"
@@ -269,6 +285,7 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         + "market blocked "
         + f"{v24.latest_scan_market_regime_direction_blocked} · "
         + f"no deterministic setup {v24.latest_scan_no_deterministic_setup}</b>"
+        + f"\nV2.4 setups:\n{setup_status}"
     )
 
 

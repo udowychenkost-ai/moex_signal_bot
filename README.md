@@ -62,7 +62,7 @@ sector peer coverage недостаточен, fundamental factor честно �
 
 ## INTRADAY V2.4 safety layer
 
-Version `0.7.1` keeps the completed, isolated `intraday_v2_4` application layer
+Version `0.7.2` keeps the completed, isolated `intraday_v2_4` application layer
 and corrects evaluation ordering and pre-candidate observability only. One
 live/shadow orchestrator composes the existing MTF, Data Integrity,
 Data SLA, microstructure, liquidity, cost, risk, calibration, adversarial and
@@ -76,8 +76,10 @@ V2.4 setup detection is now separate from permission to trade: an aligned
 D1/H1 setup is still identified under a blocking market regime, while the
 market-regime gate deterministically keeps it `NO_TRADE`. Scan/status
 diagnostics distinguish missing MTF data, D1/H1 mismatch, no deterministic
-setup, detected setup and a market-regime direction block. Version 0.7.1 does
-not relax any setup, regime, risk or qualification threshold.
+setup, detected setup and a market-regime direction block. Compact per-ticker
+diagnostics are retained in the existing scan job details, while Telegram
+status displays only detected or blocked setups. Version 0.7.2 does not relax
+any setup, regime, risk or qualification threshold.
 
 The safe deployment default is:
 

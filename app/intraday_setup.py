@@ -48,6 +48,8 @@ class SetupDetection:
     evidence: tuple[str, ...]
     invalidation: float | None
     relevant_timeframes: tuple[str, ...]
+    daily_direction: JournalDirection | None = None
+    hourly_direction: JournalDirection | None = None
 
 
 def _trend_direction(snapshot: IntradayTechnicalSnapshot) -> JournalDirection | None:
@@ -127,6 +129,8 @@ class SetupClassifierV24:
                 evidence=(D1_H1_NOT_ALIGNED_REASON,),
                 invalidation=None,
                 relevant_timeframes=REQUIRED_INTRADAY_TIMEFRAMES,
+                daily_direction=daily_direction,
+                hourly_direction=hourly_direction,
             )
         direction = daily_direction
 
@@ -249,4 +253,6 @@ class SetupClassifierV24:
             evidence=tuple(evidence),
             invalidation=_invalidation(direction, trigger) if direction_result else None,
             relevant_timeframes=relevant,
+            daily_direction=daily_direction,
+            hourly_direction=hourly_direction,
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -11,11 +12,14 @@ from sqlalchemy import func, select
 
 from app.config import Settings
 from app.db import create_engine_and_session, init_db
+from app.forward import format_application_status
 from app.journal import create_idea_journal
 from app.journal_health import JournalStorageHealth
 from app.kill_switch import KillSwitchStatus
 from app.models import DailyJournalSummaryV24, JobRunState, V24NotificationOutbox
 from app.observability_v24 import V24ObservabilityService
+from app.observation import FreshnessOverview
+from app.operations import ApplicationStatus, OrderBookStatus
 from app.position_management_v24 import (
     OpenPositionInputs,
     OpenPositionManagerV24,
@@ -335,10 +339,39 @@ async def test_v24_observability_uses_real_persistence_and_no_fake_configuration
                                 "candidates": 2,
                                 "missing_mtf": 1,
                                 "d1_h1_not_aligned": 14,
-                                "market_regime_direction_blocked": 3,
+                                "market_regime_direction_blocked": 1,
                                 "no_deterministic_setup": 2,
-                                "setup_detected": 3,
+                                "setup_detected": 2,
                                 "errors": 0,
+                                "ticker_diagnostics": [
+                                    {
+                                        "ticker": "MISMATCH",
+                                        "outcome": "D1_H1_NOT_ALIGNED",
+                                        "daily_direction": "SHORT",
+                                        "hourly_direction": "LONG",
+                                        "market_regime": "RANGE",
+                                        "setup_type": None,
+                                        "setup_direction": None,
+                                    },
+                                    {
+                                        "ticker": "CHMF",
+                                        "outcome": "MARKET_REGIME_DIRECTION_BLOCKED",
+                                        "daily_direction": "LONG",
+                                        "hourly_direction": "LONG",
+                                        "market_regime": "RANGE",
+                                        "setup_type": "BREAKOUT_RETEST",
+                                        "setup_direction": "LONG",
+                                    },
+                                    {
+                                        "ticker": "SBER",
+                                        "outcome": "SETUP_DETECTED",
+                                        "daily_direction": "SHORT",
+                                        "hourly_direction": "SHORT",
+                                        "market_regime": "DOWNTREND",
+                                        "setup_type": "VWAP_REJECT",
+                                        "setup_direction": "SHORT",
+                                    },
+                                ],
                             }
                         }
                     ),
@@ -359,8 +392,36 @@ async def test_v24_observability_uses_real_persistence_and_no_fake_configuration
         assert status.latest_scan_candidates == 2
         assert status.latest_scan_missing_mtf == 1
         assert status.latest_scan_d1_h1_not_aligned == 14
-        assert status.latest_scan_market_regime_direction_blocked == 3
+        assert status.latest_scan_market_regime_direction_blocked == 1
         assert status.latest_scan_no_deterministic_setup == 2
-        assert status.latest_scan_setup_detected == 3
+        assert status.latest_scan_setup_detected == 2
+        assert [item["ticker"] for item in status.latest_scan_setups] == ["CHMF", "SBER"]
+
+        application_status = ApplicationStatus(
+            app_version="0.7.2",
+            git_commit="test",
+            database_ok=True,
+            freshness=FreshnessOverview(0, 0, 0, None, ()),
+            latest_scan_time=NOW,
+            next_scan_time=None,
+            active_ideas=0,
+            pending_ideas=0,
+            ideas_closed_today=0,
+            scheduler_running=False,
+            orderbook=OrderBookStatus(False, None, 0, 0, 0, "DISABLED"),
+            job_states=(),
+            v24=status,
+        )
+        rendered = format_application_status(application_status, timezone="Europe/Moscow")
+        assert "CHMF · BREAKOUT_RETEST · LONG · RANGE · BLOCKED" in rendered
+        assert "SBER · VWAP_REJECT · SHORT · DOWNTREND · DETECTED" in rendered
+        assert "MISMATCH" not in rendered
+
+        no_setups = replace(status, latest_scan_setup_detected=0, latest_scan_setups=())
+        empty_rendered = format_application_status(
+            replace(application_status, v24=no_setups),
+            timezone="Europe/Moscow",
+        )
+        assert "V2.4 setups:\n<b>нет</b>" in empty_rendered
     finally:
         await engine.dispose()

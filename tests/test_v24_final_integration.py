@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from app.models import (
     DecisionSnapshotV24,
     IdeaJournal,
     Instrument,
+    JobRunState,
     ModelTradeJournal,
     PaperTrade,
     RiskBudgetSetting,
@@ -43,6 +45,7 @@ from app.orchestrator_v24 import (
     IntradayV24Orchestrator,
     V24CandidateDecision,
     V24EvaluationOutcome,
+    V24TickerDiagnostic,
 )
 from app.reporting import ReportingService
 from app.repositories import ensure_user, update_user_settings
@@ -273,7 +276,7 @@ async def test_disabled_system_flag_overrides_v24_user_selection(tmp_path: Path)
         await engine.dispose()
 
 
-async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
+async def test_scan_exposes_per_ticker_diagnostics_and_only_persists_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -289,7 +292,7 @@ async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
     try:
         await initialize_normal_kill(orchestrator)
         async with factory() as session, session.begin():
-            for ticker in ("ERR", "MARKET", "MISMATCH", "MISSING", "NOSETUP"):
+            for ticker in ("ALLOWED", "ERR", "MARKET", "MISMATCH", "MISSING", "NOSETUP"):
                 session.add(
                     Instrument(
                         secid=ticker,
@@ -308,28 +311,107 @@ async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
                 return V24EvaluationOutcome(
                     decision=None,
                     diagnostics=("setup_detected", "market_regime_direction_blocked"),
+                    ticker_diagnostic=V24TickerDiagnostic(
+                        ticker="MARKET",
+                        outcome="MARKET_REGIME_DIRECTION_BLOCKED",
+                        daily_direction="LONG",
+                        hourly_direction="LONG",
+                        market_regime="RANGE",
+                        setup_type="BREAKOUT_RETEST",
+                        setup_direction="LONG",
+                    ),
+                )
+            if instrument.secid == "ALLOWED":
+                return V24EvaluationOutcome(
+                    decision=decision(suffix="allowed-setup"),
+                    diagnostics=("setup_detected",),
+                    ticker_diagnostic=V24TickerDiagnostic(
+                        ticker="ALLOWED",
+                        outcome="SETUP_DETECTED",
+                        daily_direction="SHORT",
+                        hourly_direction="SHORT",
+                        market_regime="DOWNTREND",
+                        setup_type="BREAKOUT_RETEST",
+                        setup_direction="SHORT",
+                    ),
                 )
             diagnostic = {
                 "MISMATCH": "d1_h1_not_aligned",
                 "MISSING": "missing_mtf",
                 "NOSETUP": "no_deterministic_setup",
             }[instrument.secid]
-            return V24EvaluationOutcome(decision=None, diagnostics=(diagnostic,))
+            ticker_diagnostic = {
+                "MISMATCH": V24TickerDiagnostic(
+                    ticker="MISMATCH",
+                    outcome="D1_H1_NOT_ALIGNED",
+                    daily_direction="SHORT",
+                    hourly_direction="LONG",
+                    market_regime="RANGE",
+                ),
+                "MISSING": V24TickerDiagnostic(ticker="MISSING", outcome="MISSING_MTF"),
+                "NOSETUP": V24TickerDiagnostic(
+                    ticker="NOSETUP",
+                    outcome="NO_DETERMINISTIC_SETUP",
+                    daily_direction="LONG",
+                    hourly_direction="LONG",
+                    market_regime="RANGE",
+                ),
+            }[instrument.secid]
+            return V24EvaluationOutcome(
+                decision=None,
+                diagnostics=(diagnostic,),
+                ticker_diagnostic=ticker_diagnostic,
+            )
 
         monkeypatch.setattr(orchestrator, "_evaluate_instrument", evaluate_stub)
         result = await orchestrator.scan(as_of=NOW)
 
-        assert result["checked"] == 5
-        assert result["candidates"] == 0
+        assert result["checked"] == 6
+        assert result["candidates"] == 1
         assert result["missing_mtf"] == 1
         assert result["d1_h1_not_aligned"] == 1
         assert result["market_regime_direction_blocked"] == 1
         assert result["no_deterministic_setup"] == 1
-        assert result["setup_detected"] == 1
+        assert result["setup_detected"] == 2
         assert result["errors"] == 1
+        diagnostics = {item["ticker"]: item for item in result["ticker_diagnostics"]}
+        assert diagnostics["MISMATCH"] == {
+            "ticker": "MISMATCH",
+            "outcome": "D1_H1_NOT_ALIGNED",
+            "daily_direction": "SHORT",
+            "hourly_direction": "LONG",
+            "market_regime": "RANGE",
+            "setup_type": None,
+            "setup_direction": None,
+        }
+        assert diagnostics["NOSETUP"]["outcome"] == "NO_DETERMINISTIC_SETUP"
+        assert diagnostics["ALLOWED"]["setup_type"] == "BREAKOUT_RETEST"
+        assert diagnostics["ALLOWED"]["setup_direction"] == "SHORT"
+        assert diagnostics["ALLOWED"]["market_regime"] == "DOWNTREND"
+        assert diagnostics["MARKET"]["outcome"] == "MARKET_REGIME_DIRECTION_BLOCKED"
+        assert diagnostics["MARKET"]["setup_type"] == "BREAKOUT_RETEST"
+        assert diagnostics["MARKET"]["setup_direction"] == "LONG"
+        assert diagnostics["ERR"]["outcome"] == "ERROR"
+
+        operations = OperationalService(
+            orchestrator.settings,
+            factory,
+            DataFreshnessGuard(orchestrator.settings, factory),
+        )
+        await operations.job_started("intraday_v24_cycle", at=NOW)
+        await operations.job_finished(
+            "intraday_v24_cycle",
+            success=False,
+            details={"scan": result},
+            at=NOW,
+        )
         async with factory() as session:
-            assert await session.scalar(select(func.count()).select_from(IdeaJournal)) == 0
+            assert await session.scalar(select(func.count()).select_from(IdeaJournal)) == 1
             assert await session.scalar(select(func.count()).select_from(ModelTradeJournal)) == 0
+            state = await session.get(JobRunState, "intraday_v24_cycle")
+        assert state is not None
+        stored = json.loads(state.details)
+        assert stored["scan"]["ticker_diagnostics"] == result["ticker_diagnostics"]
     finally:
         await engine.dispose()
 
@@ -345,6 +427,8 @@ async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
                 (D1_H1_NOT_ALIGNED_REASON,),
                 None,
                 ("1d", "1h", "15m", "5m"),
+                daily_direction=JournalDirection.SHORT,
+                hourly_direction=JournalDirection.LONG,
             ),
             (D1_H1_NOT_ALIGNED_REASON,),
             ("d1_h1_not_aligned",),
@@ -357,6 +441,8 @@ async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
                 (NO_DETERMINISTIC_SETUP_REASON,),
                 None,
                 ("1d", "1h", "15m", "5m"),
+                daily_direction=JournalDirection.LONG,
+                hourly_direction=JournalDirection.LONG,
             ),
             (NO_DETERMINISTIC_SETUP_REASON,),
             ("no_deterministic_setup",),
@@ -369,6 +455,8 @@ async def test_scan_exposes_pre_candidate_diagnostics_without_persisting_them(
                 ("D1 and H1 trend aligned LONG", "market regime RANGE"),
                 95.0,
                 ("1h", "15m", "5m"),
+                daily_direction=JournalDirection.LONG,
+                hourly_direction=JournalDirection.LONG,
             ),
             (f"{MARKET_REGIME_DIRECTION_BLOCKED_REASON}:market=RANGE:direction=LONG",),
             ("setup_detected", "market_regime_direction_blocked"),
@@ -422,6 +510,21 @@ async def test_orchestrator_rejects_pre_candidates_with_specific_diagnostics(
 
         assert outcome.decision is None
         assert outcome.diagnostics == expected_diagnostics
+        assert outcome.ticker_diagnostic.ticker == "SBER"
+        assert outcome.ticker_diagnostic.daily_direction == (
+            setup.daily_direction.value if setup.daily_direction else None
+        )
+        assert outcome.ticker_diagnostic.hourly_direction == (
+            setup.hourly_direction.value if setup.hourly_direction else None
+        )
+        assert outcome.ticker_diagnostic.market_regime == "RANGE"
+        if setup.setup_type is SetupType.UNKNOWN:
+            assert outcome.ticker_diagnostic.setup_type is None
+            assert outcome.ticker_diagnostic.setup_direction is None
+        else:
+            assert outcome.ticker_diagnostic.outcome == "MARKET_REGIME_DIRECTION_BLOCKED"
+            assert outcome.ticker_diagnostic.setup_type == "BREAKOUT_RETEST"
+            assert outcome.ticker_diagnostic.setup_direction == "LONG"
     finally:
         await engine.dispose()
 
