@@ -12,7 +12,7 @@ from aiogram.enums import ParseMode
 
 from app.actual_trades import ActualTradeService
 from app.ai_analyst import AIAnalystService
-from app.ai_providers import GeminiProvider
+from app.ai_providers import GeminiProvider, OpenAIProvider
 from app.backtest import BacktestEngine
 from app.bot import BotServices, create_router
 from app.config import get_settings
@@ -42,7 +42,7 @@ from app.operations import OperationalService
 from app.orchestrator_v24 import IntradayV24Orchestrator
 from app.orderbook_ingestion import OrderBookIngestionService
 from app.paper import PaperTradingService
-from app.provider_health import GeminiHealthMonitor
+from app.provider_health import AIHealthMonitor, GeminiHealthMonitor, OpenAIHealthMonitor
 from app.quality import QualityGate
 from app.reporting import ReportingService
 from app.reporting_v24 import DailyJournalServiceV24, V24OutboxService
@@ -145,7 +145,7 @@ async def run_bot() -> None:
             )
             experiment_tracker = CandidateExperimentTracker(session_factory)
             ai_analyst = AIAnalystService(settings)
-            gemini_health = None
+            ai_health: AIHealthMonitor
             if settings.ai_provider == "gemini":
                 primary_provider = (
                     ai_analyst.provider if isinstance(ai_analyst.provider, GeminiProvider) else None
@@ -155,13 +155,28 @@ async def run_bot() -> None:
                     if isinstance(ai_analyst.fallback_provider, GeminiProvider)
                     else None
                 )
-                gemini_health = GeminiHealthMonitor(
+                ai_health = GeminiHealthMonitor(
                     settings,
                     session_factory,
                     primary=primary_provider,
                     fallback=fallback_provider,
                 )
-                await gemini_health.validate_startup()
+            else:
+                primary_provider = (
+                    ai_analyst.provider if isinstance(ai_analyst.provider, OpenAIProvider) else None
+                )
+                fallback_provider = (
+                    ai_analyst.fallback_provider
+                    if isinstance(ai_analyst.fallback_provider, OpenAIProvider)
+                    else None
+                )
+                ai_health = OpenAIHealthMonitor(
+                    settings,
+                    session_factory,
+                    primary=primary_provider,
+                    fallback=fallback_provider,
+                )
+            await ai_health.validate_startup()
             quality_gate = QualityGate(settings)
             scanner = MarketScanner(
                 session_factory,
@@ -182,7 +197,7 @@ async def run_bot() -> None:
                 V24ObservabilityService(
                     settings,
                     session_factory,
-                    gemini_health=gemini_health,
+                    ai_health=ai_health,
                 ),
             )
             liquidity = LiquidityService(settings, session_factory)
@@ -220,7 +235,7 @@ async def run_bot() -> None:
                     ai_analyst,
                     quality_gate,
                 ),
-                gemini_health,
+                ai_health,
                 liquidity,
                 ActualTradeService(session_factory),
                 RiskPolicyAdminService(session_factory, settings.admin_chat_ids),
@@ -355,6 +370,19 @@ async def gemini_health_once() -> int:
     return int(report.api_status == "ERROR")
 
 
+async def ai_health_once() -> int:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    monitor: AIHealthMonitor = (
+        GeminiHealthMonitor(settings)
+        if settings.ai_provider == "gemini"
+        else OpenAIHealthMonitor(settings)
+    )
+    report = await monitor.refresh()
+    print(json.dumps(asdict(report), ensure_ascii=False, indent=2, default=str))
+    return int(report.api_status == "ERROR")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOEX signal bot")
     parser.add_argument(
@@ -366,6 +394,7 @@ def main() -> None:
             "backtest",
             "migrate",
             "healthcheck",
+            "ai-health",
             "gemini-health",
         ),
         nargs="?",
@@ -393,6 +422,8 @@ def main() -> None:
         asyncio.run(migrate_once())
     elif args.command == "gemini-health":
         raise SystemExit(asyncio.run(gemini_health_once()))
+    elif args.command == "ai-health":
+        raise SystemExit(asyncio.run(ai_health_once()))
     else:
         asyncio.run(healthcheck_once())
 

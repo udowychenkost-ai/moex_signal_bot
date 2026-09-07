@@ -4,7 +4,7 @@ This checklist intentionally separates code readiness from data, policy,
 calibration and publication readiness. A green implementation does not make a
 strategy safe to publish.
 
-## Current release state (0.7.2)
+## Current release state (0.8.0)
 
 | Readiness area | State | Evidence / blocker |
 |---|---|---|
@@ -34,7 +34,7 @@ production-qualification threshold was relaxed.
   publication eligibility.
 - [x] The orchestrator reuses existing MTF, data, execution, risk, calibration,
   adversarial and audit services.
-- [x] Missing/unknown mandatory inputs fail closed; Gemini cannot override a
+- [x] Missing/unknown mandatory inputs fail closed; AI cannot override a
   deterministic failure.
 - [x] Candidate claim, journal, snapshot, optional model record and outbox rows
   commit in one transaction.

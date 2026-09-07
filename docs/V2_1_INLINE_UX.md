@@ -86,7 +86,7 @@ Paginated watchlist:
 rendered to the user. An idea without a successful creation-time review shows a
 compact explanation and omits empty bull/bear/timing/risk sections. Its
 `Проанализировать сейчас` action refreshes the horizon timeframes, builds a new
-current candidate, runs the unchanged QualityGate and Gemini structured
+current candidate, runs the unchanged QualityGate and selected-provider structured
 contract, and stores only request telemetry. It does not call
 `apply_ai_review`, update `TradingIdea`, or replace `TradingIdeaSnapshot`.
 

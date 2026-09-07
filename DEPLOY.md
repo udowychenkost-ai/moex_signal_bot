@@ -29,12 +29,12 @@ Edit `.env` and set at minimum:
   receive observation notifications;
 - one long random `POSTGRES_PASSWORD` and exactly the same URL-encoded password
 inside `DATABASE_URL`.
-- `GEMINI_API_KEY` for the default `AI_PROVIDER=gemini` and
-  `AI_MODEL=gemini-3.6-flash`. One transient primary failure uses exactly one
-  `AI_FALLBACK_MODEL=gemini-flash-lite-latest` request. The V2 policy is
+- `OPENAI_API_KEY` for the default `AI_PROVIDER=openai` and
+  `AI_MODEL=gpt-5.6-terra`. One retryable primary failure uses at most one
+  `AI_FALLBACK_MODEL=gpt-5.6-luna` request. The V2 policy is
   fail-closed: if review is unavailable, PASS candidates are recorded as
-  `AI_NOT_REVIEWED / WAIT` and no new V2 idea is published. OpenAI remains an
-  optional provider but is not the deployment default.
+  `AI_NOT_REVIEWED / WAIT` and no new V2 idea is published. Gemini remains an
+  optional compatibility provider but is not the deployment default.
 
 Market context defaults are deployment-safe: `IMOEX` is mandatory and
 `RTSI,RGBITR,RVI` are secondary daily diagnostics. Keep
@@ -85,10 +85,10 @@ strategy-family markers, source fetch timestamps and snapshot policy-version
 references. Existing users are explicitly migrated to `LEGACY_ONLY`; legacy
 ideas remain `LEGACY`. No historical decision is rebuilt or deleted.
 
-The V2.4 orchestrator and admin risk-policy wizard are registered in 0.7.2, but
+The V2.4 orchestrator and admin risk-policy wizard are registered in 0.8.0, but
 production must still keep `INTRADAY_V24_ENABLED=false`. Public data and current
-configuration cannot yet satisfy every mandatory gate. Shadow processing is a
-separate opt-in and never permits Telegram publication.
+configuration cannot yet satisfy every mandatory gate. Shadow processing stays
+enabled and never permits Telegram publication.
 
 On first deployment wait for ingestion of stock and IMOEX histories before
 expecting ideas. `/status` lists stale `IMOEX/timeframe` records until the
@@ -102,7 +102,7 @@ docker compose logs --tail=200 app
 docker compose logs -f app
 docker compose exec app python -m app healthcheck
 docker compose exec app python -m app migrate
-docker compose exec app python -m app gemini-health
+docker compose exec app python -m app ai-health
 ```
 
 In Telegram run:
@@ -120,12 +120,13 @@ shown explicitly and prevents new ideas for the affected ticker/horizon.
 The `idea_scanning` job details include checked instruments, quant candidates,
 QualityGate PASS/WEAK/REJECT, AI outcomes/errors, publications, top rejection
 reasons, requests/tokens/cost/fallbacks, cooldown and top-N suppressions. The
-Telegram `🧠 Gemini` status calls ListModels and shows primary/fallback health and
-today's request telemetry without exposing the API key.
+Telegram `🧠 OpenAI` status refreshes a minimal Responses probe and shows
+primary/fallback health and today's selected-provider telemetry without exposing
+the API key.
 
 ## 4. Update and redeploy
 
-Before the 0.7.2 update, back up PostgreSQL as described below
+Before the 0.8.0 update, back up PostgreSQL as described below
 and preserve the current environment file:
 
 ```bash
@@ -137,22 +138,23 @@ Ensure the following values are present; keep all existing Telegram/PostgreSQL
 secrets and V2 thresholds unchanged:
 
 ```env
-GEMINI_API_KEY=replace_with_real_key
-AI_PROVIDER=gemini
-AI_MODEL=gemini-3.6-flash
-AI_FALLBACK_MODEL=gemini-flash-lite-latest
+OPENAI_API_KEY=replace_with_real_key
+OPENAI_BASE_URL=https://api.openai.com/v1
+AI_PROVIDER=openai
+AI_MODEL=gpt-5.6-terra
+AI_FALLBACK_MODEL=gpt-5.6-luna
 AI_MAX_OUTPUT_TOKENS=4096
 AI_FILTER_ENABLED=true
 AI_ALLOW_UNREVIEWED_FALLBACK=false
 ENABLE_LEGACY_STRATEGY=true
 INTRADAY_V24_ENABLED=false
-INTRADAY_V24_SHADOW_ENABLED=false
+INTRADAY_V24_SHADOW_ENABLED=true
 INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
 INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
 INTRADAY_V24_LEVERAGE_ENABLED=false
 ```
 
-Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. Version 0.7.2 has
+Do not set `INTRADAY_V24_ENABLED=true` on the live VPS yet. Version 0.8.0 has
 the fail-closed integration code, but external data, approved Data SLA,
 liquidity/cost/opportunity settings, Risk Budget and calibration must pass the
 separate production checklist first.
@@ -163,24 +165,23 @@ Then update without deleting the database volume:
 git fetch origin
 git checkout integrate-claude-version
 git pull --ff-only origin integrate-claude-version
-sed -i 's/^APP_VERSION=.*/APP_VERSION=0.7.2/' .env
-sed -i 's/^AI_MODEL=.*/AI_MODEL=gemini-3.6-flash/' .env
-sed -i 's/^AI_FALLBACK_MODEL=.*/AI_FALLBACK_MODEL=gemini-flash-lite-latest/' .env
-if grep -q '^INTRADAY_V24_ENABLED=' .env; then
-  sed -i 's/^INTRADAY_V24_ENABLED=.*/INTRADAY_V24_ENABLED=false/' .env
-else
-  printf '%s\n' 'INTRADAY_V24_ENABLED=false' >> .env
-fi
-if grep -q '^INTRADAY_V24_SHADOW_ENABLED=' .env; then
-  sed -i 's/^INTRADAY_V24_SHADOW_ENABLED=.*/INTRADAY_V24_SHADOW_ENABLED=false/' .env
-else
-  printf '%s\n' 'INTRADAY_V24_SHADOW_ENABLED=false' >> .env
-fi
-if grep -q '^ENABLE_LEGACY_STRATEGY=' .env; then
-  sed -i 's/^ENABLE_LEGACY_STRATEGY=.*/ENABLE_LEGACY_STRATEGY=true/' .env
-else
-  printf '%s\n' 'ENABLE_LEGACY_STRATEGY=true' >> .env
-fi
+set_env() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key}=${value}|" .env
+  else
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+set_env APP_VERSION 0.8.0
+set_env AI_PROVIDER openai
+set_env OPENAI_BASE_URL https://api.openai.com/v1
+set_env AI_MODEL gpt-5.6-terra
+set_env AI_FALLBACK_MODEL gpt-5.6-luna
+set_env INTRADAY_V24_ENABLED false
+set_env INTRADAY_V24_SHADOW_ENABLED true
+set_env ENABLE_LEGACY_STRATEGY true
 if grep -q '^AI_MAX_OUTPUT_TOKENS=' .env; then
   sed -i 's/^AI_MAX_OUTPUT_TOKENS=.*/AI_MAX_OUTPUT_TOKENS=4096/' .env
 else
@@ -208,7 +209,7 @@ docker compose up -d --remove-orphans
 docker compose ps
 docker compose logs --tail=200 app
 docker compose exec app python -m app healthcheck
-docker compose exec app python -m app gemini-health
+docker compose exec app python -m app ai-health
 docker compose exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 docker compose exec -T postgres sh -c \
@@ -225,7 +226,7 @@ The expected Alembic revision is `20260902_0021`. Do not run `docker compose
 down -v`: the `-v` flag would remove the persistent PostgreSQL volume.
 
 After the app starts, `/status` must show Alembic `20260902_0021`, Legacy
-`ENABLED`, Intraday engine/shadow/publication `DISABLED`, journal `AVAILABLE`,
+`ENABLED`, Intraday engine/publication `DISABLED`, shadow `ENABLED`, journal `AVAILABLE`,
 and the actual Data SLA/risk/calibration/kill states. `NOT_CONFIGURED` is
 expected for policies not yet approved and must not be “fixed” with invented
 limits. In Telegram, Settings → Режим анализа persists the per-user selection;

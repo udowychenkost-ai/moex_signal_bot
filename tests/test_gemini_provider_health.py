@@ -25,7 +25,7 @@ from app.quality import QualityGate
 from app.scheduler import ScheduledJobs
 from tests.test_telegram_context import callback_update, seeded_context
 from tests.test_ux_hotfix import FakeIngestion, InteractiveBot, MenuSignals
-from tests.test_v2_quality_ai import candidate, gemini_payload
+from tests.test_v2_quality_ai import candidate, gemini_payload, gemini_settings
 
 
 def gemini_provider(
@@ -75,7 +75,7 @@ def google_error(status_code: int, status: str, message: str, *, reason: str = "
 
 @pytest.mark.asyncio
 async def test_real_http_contract_primary_gemini_success() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="secret-test-key")
+    settings = gemini_settings(gemini_api_key="secret-test-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
@@ -100,7 +100,7 @@ async def test_real_http_contract_primary_gemini_success() -> None:
 
 @pytest.mark.asyncio
 async def test_base_url_and_model_resource_prefix_are_normalized_once() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1beta/models/gemini-3.6-flash:generateContent"
@@ -123,7 +123,7 @@ async def test_base_url_and_model_resource_prefix_are_normalized_once() -> None:
 
 @pytest.mark.asyncio
 async def test_primary_model_404_is_classified_as_fallback_eligible() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -148,7 +148,7 @@ async def test_primary_model_404_is_classified_as_fallback_eligible() -> None:
 
 @pytest.mark.asyncio
 async def test_model_404_uses_flash_lite_once_and_fallback_succeeds() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -179,7 +179,7 @@ async def test_model_404_uses_flash_lite_once_and_fallback_succeeds() -> None:
 
 @pytest.mark.asyncio
 async def test_both_models_404_fail_closed_without_more_retries() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -206,7 +206,7 @@ async def test_both_models_404_fail_closed_without_more_retries() -> None:
 
 @pytest.mark.asyncio
 async def test_invalid_key_is_safe_and_does_not_retry_fallback() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="invalid-secret")
+    settings = gemini_settings(gemini_api_key="invalid-secret")
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -235,7 +235,7 @@ async def test_invalid_key_is_safe_and_does_not_retry_fallback() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["429", "timeout"])
 async def test_rate_limit_and_timeout_remain_fallback_eligible(failure: str) -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
@@ -255,7 +255,7 @@ async def test_rate_limit_and_timeout_remain_fallback_eligible(failure: str) -> 
 
 @pytest.mark.asyncio
 async def test_invalid_structured_json_remains_provider_success_but_analysis_fails_closed() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -284,7 +284,7 @@ async def test_invalid_structured_json_remains_provider_success_but_analysis_fai
 
 @pytest.mark.asyncio
 async def test_provider_health_uses_list_models_and_validates_generate_content() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="health-key")
+    settings = gemini_settings(gemini_api_key="health-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["x-goog-api-key"] == "health-key"
@@ -324,7 +324,7 @@ async def test_provider_health_uses_list_models_and_validates_generate_content()
 
 @pytest.mark.asyncio
 async def test_listed_legacy_model_with_generate_content_404_is_not_available() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="health-key")
+    settings = gemini_settings(gemini_api_key="health-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
@@ -374,7 +374,7 @@ async def test_listed_legacy_model_with_generate_content_404_is_not_available() 
 async def test_startup_validation_marks_primary_missing_fallback_available_degraded(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
@@ -422,7 +422,7 @@ async def test_startup_validation_marks_primary_missing_fallback_available_degra
 async def test_health_reported_primary_unavailable_skips_primary_generate_and_uses_fallback() -> (
     None
 ):
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     post_paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -475,7 +475,7 @@ async def test_health_reported_primary_unavailable_skips_primary_generate_and_us
 async def test_telegram_gemini_diagnostics_are_compact_and_include_error_code() -> None:
     engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
     await init_db(engine)
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     now = datetime.now(UTC)
     async with factory() as session, session.begin():
         session.add_all(

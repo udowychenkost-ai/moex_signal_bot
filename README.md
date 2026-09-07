@@ -32,9 +32,9 @@
   independent confirmations, explicit conflicts, regime overrides and R:R;
 - batch ranking по `final_quality_score`, configurable top-N/day limits и
   cooldown для `ticker + horizon + direction`;
-- fail-closed Gemini second opinion только для `PASS` candidates, строгий JSON
+- fail-closed OpenAI second opinion только для `PASS` candidates, строгий JSON
   schema, provider/model/usage/cost/latency/error/fallback telemetry и запрет
-  LLM «спасать» REJECT; OpenAI сохранён как альтернативный provider;
+  LLM «спасать» REJECT; Gemini сохранён как совместимый provider;
 - frozen `candidate_experiments` для quant/AI approved/rejected cohorts и
   отдельный lifecycle фактического результата даже для неопубликованных идей;
 - Telegram-меню из шести разделов и V2.1 contextual inline UX: stateful
@@ -62,7 +62,7 @@ sector peer coverage недостаточен, fundamental factor честно �
 
 ## INTRADAY V2.4 safety layer
 
-Version `0.7.2` keeps the completed, isolated `intraday_v2_4` application layer
+Version `0.8.0` keeps the completed, isolated `intraday_v2_4` application layer
 and corrects evaluation ordering and pre-candidate observability only. One
 live/shadow orchestrator composes the existing MTF, Data Integrity,
 Data SLA, microstructure, liquidity, cost, risk, calibration, adversarial and
@@ -78,15 +78,16 @@ market-regime gate deterministically keeps it `NO_TRADE`. Scan/status
 diagnostics distinguish missing MTF data, D1/H1 mismatch, no deterministic
 setup, detected setup and a market-regime direction block. Compact per-ticker
 diagnostics are retained in the existing scan job details, while Telegram
-status displays only detected or blocked setups. Version 0.7.2 does not relax
-any setup, regime, risk or qualification threshold.
+status displays only detected or blocked setups. Version 0.8.0 changes only the
+AI provider layer and does not relax any setup, regime, risk or qualification
+threshold.
 
 The safe deployment default is:
 
 ```env
 ENABLE_LEGACY_STRATEGY=true
 INTRADAY_V24_ENABLED=false
-INTRADAY_V24_SHADOW_ENABLED=false
+INTRADAY_V24_SHADOW_ENABLED=true
 INTRADAY_V24_STRATEGY_VERSION=intraday_v2_4
 INTRADAY_V24_MAX_HOLDING_TRADING_DAYS=2
 INTRADAY_V24_LEVERAGE_ENABLED=false
@@ -116,7 +117,7 @@ provide the verified event/news context, full reliable L2, tick/session and
 borrow facts required by the deterministic gates; Data SLA, liquidity, cost,
 risk and opportunity policies also require operator-approved values, and the
 strategy is uncalibrated. Missing data remains `DATA_NOT_AVAILABLE` and cannot
-be converted to a pass by Gemini.
+be converted to a pass by any AI provider.
 
 V2.4 documentation:
 
@@ -191,10 +192,10 @@ Copy-Item .env.example .env
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:replace_me
-GEMINI_API_KEY=replace_me
-AI_PROVIDER=gemini
-AI_MODEL=gemini-3.6-flash
-AI_FALLBACK_MODEL=gemini-flash-lite-latest
+OPENAI_API_KEY=replace_me
+AI_PROVIDER=openai
+AI_MODEL=gpt-5.6-terra
+AI_FALLBACK_MODEL=gpt-5.6-luna
 AI_MAX_OUTPUT_TOKENS=4096
 ```
 
@@ -231,7 +232,7 @@ Reply Keyboard остаются fallback:
 сигналов», «Рынок сейчас» и «Проверить акцию». Последняя запрашивает тикер через
 ForceReply, поэтому `/signal` вводить необязательно. У исторической идеи без
 creation-time AI review показывается компактная причина и кнопка
-«Проанализировать сейчас». Она строит новый current candidate, выполняет Gemini
+«Проанализировать сейчас». Она строит новый current candidate, выполняет OpenAI
 review и маркирует результат как текущий; сохранённые verdict/snapshot старой
 идеи не изменяются.
 
@@ -284,27 +285,25 @@ lot_size`. Затем применяются существующий класс
 расчёта. Кнопка `💧 Ликвидность` открывает подробные диапазоны ±0.25%, ±0.50% и
 ±1.00% без отдельного MOEX-запроса на каждое открытие карточки.
 
-Default provider — Gemini `gemini-3.6-flash`. При timeout, rate limit,
-`MODEL_NOT_FOUND`, unsupported model или временной недоступности primary
-выполняется один запрос к
-`gemini-flash-lite-latest`. Для `AIAnalysis` используется бюджет 4096 output
-tokens и официально поддерживаемый Gemini 3.6 `thinkingLevel=minimal`.
-Truncated/malformed/schema-invalid JSON получает один compact retry на primary;
-если он также невалиден — ровно один запрос к fallback. Если все попытки
-неуспешны, отсутствует
-`GEMINI_API_KEY` или обе модели недоступны, результат —
+Default provider — OpenAI `gpt-5.6-terra` через официальный Python SDK и
+Responses API. При `429`, `408`, `5xx`, timeout или transient connection error
+выполняется не более одного запроса к `gpt-5.6-luna`. Ошибки авторизации,
+постоянные ошибки модели/config и невалидный structured response не маскируются
+fallback-моделью. Если все разрешённые попытки неуспешны, отсутствует
+`OPENAI_API_KEY` или structured output не проходит schema/language validation,
+результат —
 `AI_NOT_REVIEWED / WAIT`: candidate остаётся в research cohort, но
 `TradingIdea` не публикуется. Fallback без успешного AI review по умолчанию
 выключен. `AI score` — рейтинг анализа 0–100, не статистическая вероятность
-успеха. Для альтернативного OpenAI provider задайте `AI_PROVIDER=openai`,
-совместимый `AI_MODEL` и `OPENAI_API_KEY`.
+успеха. Gemini остаётся доступен при явном `AI_PROVIDER=gemini`; его старые
+retry/fallback semantics и исторические telemetry rows не изменяются.
 
 Structured validation errors имеют отдельный код
 `INVALID_STRUCTURED_RESPONSE`. Каждая попытка сохраняется отдельно с этапом
 `PRIMARY`, `PRIMARY_STRUCTURED_RETRY` или `FALLBACK`; raw model text в БД и логи
 не записывается.
 
-Все пользовательские описательные поля Gemini возвращаются на русском языке;
+Все пользовательские описательные поля AI возвращаются на русском языке;
 тикеры, числа и технические обозначения вроде RSI, EMA20, BUY, SELL, IMOEX и R:R
 остаются без перевода. Преимущественно англоязычный ответ получает код
 `LANGUAGE_MISMATCH` и один повторный structured-запрос на primary с явной
@@ -312,17 +311,18 @@ Structured validation errors имеют отдельный код
 удалось, действует прежняя fallback/fail-closed политика, поэтому английский
 текст пользователю не публикуется.
 
-При старте Gemini сначала сверяется с `v1beta/models`, затем для каждой модели
-выполняется минимальный structured `generateContent` probe. Наличие в ListModels
-означает только `LISTED`; доступной модель считается только при `CALLABLE=YES`.
+При старте выбранный provider проверяет primary и fallback реальным минимальным
+structured-вызовом. Для OpenAI используется Responses probe; доступной модель
+считается только при `CALLABLE=YES`. Для совместимого Gemini дополнительно
+сохраняется различие `LISTED`/`CALLABLE`.
 Primary unavailable при доступном fallback даёт `DEGRADED`, обе недоступные
 модели — `ERROR`; market ingestion и scheduler при этом продолжают работать.
-Кнопка `🧠 Gemini` показывает доступность моделей и статистику запросов без
+Кнопка `🧠 OpenAI` показывает доступность моделей и статистику запросов без
 секретов, а `📈 Последний scan` — полный QualityGate/AI/publication funnel.
 Немедленная ручная проверка без ожидания сигнала:
 
 ```bash
-python -m app gemini-health
+python -m app ai-health
 ```
 
 `TECHNICAL_SCORING_MODEL=legacy` оставлен default, чтобы обновление не меняло

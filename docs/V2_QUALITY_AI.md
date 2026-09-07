@@ -13,7 +13,7 @@ quant candidate
   -> frozen candidate_experiment
   -> PASS candidates ranked by final_quality_score
   -> cooldown and per-horizon AI candidate cap
-  -> structured provider second opinion (Gemini default)
+  -> structured provider second opinion (OpenAI default)
   -> APPROVE / STRONG_APPROVE only
   -> per-scan and per-day top-N
   -> existing TradingIdea repository and lifecycle
@@ -80,20 +80,13 @@ claimed in these historical figures. Full metrics and limitations are in
 
 ## AI contract
 
-Default provider: Google Gemini `gemini-3.6-flash`, configurable through
-`AI_PROVIDER` and `AI_MODEL`. `OpenAIProvider` remains available as an explicit
-alternative. Both adapters use a Pydantic-generated JSON schema, a bounded
-output budget and only the same compact decision snapshot. Gemini uses
-`responseMimeType=application/json` plus `responseJsonSchema`; unsupported
-Pydantic validation keywords are removed from the wire schema and validated
-locally after receipt. The JSON Schema field is intentional: the current REST
-reference deprecates the older OpenAPI-subset `responseSchema` form. `AIAnalysis`
-has a 4096-token output ceiling and Gemini
-3.6 uses `thinkingConfig.thinkingLevel=minimal`, which is the supported
-classifier-oriented setting rather than an unsupported attempt to disable
-thinking. API details: [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
-[Gemini Flash-Lite latest alias](https://ai.google.dev/gemini-api/docs/models)
-and [API errors](https://ai.google.dev/gemini-api/docs/generate-content/api-errors).
+Default provider: OpenAI `gpt-5.6-terra` with `gpt-5.6-luna` as the bounded
+retryable-error fallback. `OpenAIProvider` uses the official Python SDK and
+Responses API with strict JSON Schema output, `store=false`, no tools and only
+the existing compact candidate snapshot. Gemini remains available when
+explicitly selected and retains its `responseMimeType=application/json`,
+`responseJsonSchema`, validation retry and Flash-Lite fallback behavior.
+`AIAnalysis` keeps the same Pydantic contract and 4096-token output ceiling.
 
 The prompt forbids invented news, financial figures, levels, prices, events and
 forecasts. Missing inputs are marked unavailable. The result schema contains:
@@ -109,15 +102,15 @@ technical notation such as RSI, EMA/SMA, BUY/SELL, IMOEX and R:R may remain
 unchanged. Post-validation classifies predominantly non-Russian prose as
 `LANGUAGE_MISMATCH` and performs one primary structured retry with a stricter
 Russian-only instruction (`PRIMARY_LANGUAGE_RETRY`). If it still fails, the
-normal bounded fallback and fail-closed policy applies; English prose is not
-published to the user.
+request fails closed; English prose is not published to the user.
 
-Timeout/rate-limit/temporary-unavailable errors from the primary Gemini model
-permit exactly one request to `gemini-flash-lite-latest`. Truncated, malformed
-or schema-invalid JSON is marked `INVALID_STRUCTURED_RESPONSE`, retried once on
-the primary with a stricter compact instruction, and then tried once on Flash
-Lite. Authentication/configuration errors remain non-retryable. If no valid
-review is received, the result is
+For OpenAI, only `408`, `429`, `5xx`, timeout and transient connection errors
+permit one fallback request. Authentication/permission and permanent
+configuration/model errors are non-retryable. Truncated, malformed,
+schema-invalid JSON or an unknown verdict is marked
+`INVALID_STRUCTURED_RESPONSE` and fails closed without fallback. Gemini keeps
+its existing bounded primary validation retry and compatibility fallback. If no
+valid review is received, the result is
 `AI_NOT_REVIEWED / WAIT`. Request provider, exact returned model, raw usage,
 input/output tokens, estimated cost, latency, error, `fallback_used` and retry
 stage are

@@ -135,15 +135,15 @@ def format_current_ai_analysis(
 ) -> str:
     if review.status != "OK":
         return (
-            "🧠 <b>Gemini</b>\n\n"
+            f"{_provider_title(review.provider)}\n\n"
             "AI-анализ текущего состояния не выполнен.\n\n"
             "<b>Причина:</b>\n"
-            "Gemini временно недоступен или не вернул корректный структурированный ответ.\n\n"
+            "AI provider временно недоступен или не вернул корректный структурированный ответ.\n\n"
             "<i>Исторический AI verdict идеи не изменён.</i>"
         )
     analysis = review.analysis
     header = (
-        "🧠 <b>Gemini</b>\n\n"
+        f"{_provider_title(review.provider)}\n\n"
         f"Вердикт: <b>{AI_VERDICT_LABELS[analysis.verdict]}</b>\n"
         f"AI-оценка: <b>{analysis.score:.0f}/100</b>"
     )
@@ -162,9 +162,9 @@ def format_current_ai_analysis(
     return "\n\n".join((header, context, *sections, marker))
 
 
-def format_current_ai_unavailable(reason: str) -> str:
+def format_current_ai_unavailable(reason: str, *, provider: str | None = None) -> str:
     return (
-        "🧠 <b>Gemini</b>\n\n"
+        f"{_provider_title(provider)}\n\n"
         "AI-анализ текущего состояния не выполнен.\n\n"
         f"<b>Причина:</b>\n{escape(reason)}\n\n"
         "<i>Исторический AI verdict идеи и snapshot не изменены.</i>"

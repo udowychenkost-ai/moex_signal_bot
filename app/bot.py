@@ -75,7 +75,7 @@ from app.models import (
 from app.on_demand_ai import OnDemandAIService
 from app.operations import OperationalService, realized_r
 from app.paper import PaperTradingService, format_paper_summary
-from app.provider_health import GeminiHealthMonitor, format_gemini_diagnostics
+from app.provider_health import AIHealthMonitor, format_ai_diagnostics
 from app.reporting import ReportingService, format_best_ideas, format_idea_details
 from app.reporting_v24 import V24IdeaDisplayContext, format_v24_idea_card
 from app.repositories import (
@@ -142,10 +142,16 @@ class BotServices:
     operations: OperationalService | None = None
     market_overview: MarketOverviewService | None = None
     on_demand_ai: OnDemandAIService | None = None
-    gemini_health: GeminiHealthMonitor | None = None
+    ai_health: AIHealthMonitor | None = None
     liquidity: LiquidityService | None = None
     actual_trades: ActualTradeService | None = None
     risk_policy_admin: RiskPolicyAdminService | None = None
+    # Compatibility for integrations created before provider-neutral diagnostics.
+    gemini_health: AIHealthMonitor | None = None
+
+    def __post_init__(self) -> None:
+        if self.ai_health is None and self.gemini_health is not None:
+            self.ai_health = self.gemini_health
 
 
 class ActualEntryStates(StatesGroup):
@@ -897,7 +903,7 @@ def create_router(services: BotServices) -> Router:
             )
         else:
             lines.append("Audit matrix недоступна.")
-        lines.append("\nHard FAIL не может быть перекрыт Gemini или средним score.")
+        lines.append("\nHard FAIL не может быть перекрыт AI provider или средним score.")
         await _edit_context(callback, "\n".join(lines), v24_idea_keyboard(trade_id))
         await callback.answer()
 
@@ -1429,7 +1435,7 @@ def create_router(services: BotServices) -> Router:
         await message.answer(
             f"Ваш режим анализа: <b>{mode_label}</b>\n\n"
             + format_application_status(status, timezone=services.settings.scheduler_timezone),
-            reply_markup=status_context_keyboard(),
+            reply_markup=status_context_keyboard(services.settings.ai_provider),
         )
 
     @router.message(Command("stats"))
@@ -1474,7 +1480,7 @@ def create_router(services: BotServices) -> Router:
         await _edit_context(
             callback,
             "\n\n".join(sections),
-            statistics_context_keyboard(selected, "all"),
+            statistics_context_keyboard(selected, "all", services.settings.ai_provider),
         )
         await callback.answer()
 
@@ -1512,7 +1518,7 @@ def create_router(services: BotServices) -> Router:
         await _edit_context(
             callback,
             "\n\n".join(sections),
-            statistics_context_keyboard("all", short_horizon),
+            statistics_context_keyboard("all", short_horizon, services.settings.ai_provider),
         )
         await callback.answer()
 
@@ -1557,7 +1563,11 @@ def create_router(services: BotServices) -> Router:
         await _edit_context(
             callback,
             "\n\n".join(sections),
-            statistics_context_keyboard(period_key, horizon_key),
+            statistics_context_keyboard(
+                period_key,
+                horizon_key,
+                services.settings.ai_provider,
+            ),
         )
         await callback.answer()
 
@@ -1600,11 +1610,13 @@ def create_router(services: BotServices) -> Router:
                 )
                 and (horizon_value is None or row.horizon == horizon_value)
             ]
-            gemini = [
+            ai_approved = [
                 row
                 for row in quant
-                if row.ai_provider == "gemini" and row.ai_verdict in {"STRONG_APPROVE", "APPROVE"}
+                if row.ai_provider == services.settings.ai_provider
+                and row.ai_verdict in {"STRONG_APPROVE", "APPROVE"}
             ]
+            provider_label = "OpenAI" if services.settings.ai_provider == "openai" else "Gemini"
 
             def cohort_line(name: str, rows: list[CandidateExperiment]) -> str:
                 actual = [row.actual_r for row in rows if row.actual_r is not None]
@@ -1620,10 +1632,10 @@ def create_router(services: BotServices) -> Router:
 
             text = "\n\n".join(
                 (
-                    "🧠 <b>Gemini vs Quant</b>",
+                    f"🧠 <b>{provider_label} vs Quant</b>",
                     cohort_line("ALL QUANT", quant),
-                    cohort_line("GEMINI APPROVED", gemini),
-                    "OpenAI rows не включены в Gemini cohort.",
+                    cohort_line(f"{provider_label.upper()} APPROVED", ai_approved),
+                    f"В cohort включены только строки provider={services.settings.ai_provider}.",
                 )
             )
         else:
@@ -1682,7 +1694,11 @@ def create_router(services: BotServices) -> Router:
         await _edit_context(
             callback,
             text,
-            statistics_context_keyboard(period_key, horizon_key),
+            statistics_context_keyboard(
+                period_key,
+                horizon_key,
+                services.settings.ai_provider,
+            ),
         )
         await callback.answer()
 
@@ -1820,7 +1836,7 @@ def create_router(services: BotServices) -> Router:
             await callback.answer()
             return
         if services.on_demand_ai is None:
-            await callback.answer("Gemini analysis недоступен", show_alert=True)
+            await callback.answer("AI analysis недоступен", show_alert=True)
             return
         idea_id = int(callback.data.partition(":")[2])
         try:
@@ -1831,10 +1847,11 @@ def create_router(services: BotServices) -> Router:
         if has_historical_ai_review(context.idea):
             await callback.answer("У идеи уже есть creation-time AI review", show_alert=True)
             return
-        await callback.answer("Gemini анализирует текущее состояние…")
+        provider_label = "OpenAI" if services.settings.ai_provider == "openai" else "Gemini"
+        await callback.answer(f"{provider_label} анализирует текущее состояние…")
         await _edit_context(
             callback,
-            f"⏳ <b>Gemini анализирует {escape(context.idea.ticker)}…</b>",
+            f"⏳ <b>{provider_label} анализирует {escape(context.idea.ticker)}…</b>",
             idea_context_keyboard(
                 context.idea,
                 watched=context.watched,
@@ -1849,15 +1866,18 @@ def create_router(services: BotServices) -> Router:
             StaleMarketDataError,
             UnknownTickerError,
         ) as error:
-            text = format_current_ai_unavailable(str(error))
+            text = format_current_ai_unavailable(str(error), provider=services.settings.ai_provider)
         except Exception:
-            logger.exception("On-demand Gemini analysis failed for idea %s", idea_id)
+            logger.exception("On-demand AI analysis failed for idea %s", idea_id)
             text = format_current_ai_unavailable(
-                "Сервис текущего анализа временно недоступен. Попробуйте позже."
+                "Сервис текущего анализа временно недоступен. Попробуйте позже.",
+                provider=services.settings.ai_provider,
             )
         else:
             if result.candidate is None or result.review is None:
-                text = format_current_ai_unavailable(result.reason)
+                text = format_current_ai_unavailable(
+                    result.reason, provider=services.settings.ai_provider
+                )
             else:
                 text = format_current_ai_analysis(result.review, result.candidate)
         fresh_context = await context_service.idea_context(user.telegram_id, idea_id)
@@ -2334,7 +2354,9 @@ def create_router(services: BotServices) -> Router:
         )
         await callback.answer()
 
-    @router.callback_query(F.data.regexp(r"^status:(refresh|moex|gemini|scheduler|database|scan)$"))
+    @router.callback_query(
+        F.data.regexp(r"^status:(refresh|moex|ai|gemini|scheduler|database|scan)$")
+    )
     async def status_section(callback: CallbackQuery) -> None:
         user = await _ensure_callback_user(callback, services)
         if callback.message is None or callback.data is None or services.operations is None:
@@ -2363,13 +2385,17 @@ def create_router(services: BotServices) -> Router:
                 f"Latest update: <b>{freshness.latest_moex_update or 'нет'}</b>\n"
                 f"Stale: <b>{escape(examples or 'нет')}</b>"
             )
-        elif section == "gemini":
-            if services.gemini_health is None:
-                text = "🧠 <b>Gemini</b>\n\nAPI: <b>ERROR</b>\nProvider health monitor недоступен."
+        elif section in {"ai", "gemini"}:
+            provider_label = "OpenAI" if services.settings.ai_provider == "openai" else "Gemini"
+            if services.ai_health is None:
+                text = (
+                    f"🧠 <b>{provider_label}</b>\n\n"
+                    "API: <b>ERROR</b>\nProvider health monitor недоступен."
+                )
             else:
-                provider_status = await services.gemini_health.refresh()
-                request_stats = await services.gemini_health.request_diagnostics()
-                text = format_gemini_diagnostics(provider_status, request_stats)
+                provider_status = await services.ai_health.refresh()
+                request_stats = await services.ai_health.request_diagnostics()
+                text = format_ai_diagnostics(provider_status, request_stats)
         elif section == "scheduler":
             jobs = "\n".join(
                 f"• {escape(item.job_name)}: "
@@ -2403,7 +2429,11 @@ def create_router(services: BotServices) -> Router:
                 f"Result: <b>{'OK' if scan and scan.success else 'ERROR/WAIT'}</b>\n\n"
                 f"{format_scan_funnel(scan_details)}"
             )
-        await _edit_context(callback, text, status_context_keyboard())
+        await _edit_context(
+            callback,
+            text,
+            status_context_keyboard(services.settings.ai_provider),
+        )
         await callback.answer()
 
     @router.callback_query(F.data == "settings:menu")

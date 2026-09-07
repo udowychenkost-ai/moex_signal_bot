@@ -97,8 +97,6 @@ class OnDemandAIService:
                 )
 
     async def analyze(self, idea: TradingIdea) -> CurrentAIResult:
-        if self.settings.ai_provider != "gemini":
-            return CurrentAIResult(None, None, None, "Gemini не выбран как AI provider.")
         try:
             horizon = IdeaHorizon(idea.horizon)
         except ValueError:

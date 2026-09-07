@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 
 from app.ai_providers import (
     AIProvider,
-    AsyncHTTPClient,
     GeminiProvider,
     OpenAIProvider,
     ProviderCallResult,
@@ -417,7 +416,7 @@ class AIAnalystService:
         self,
         settings: Settings,
         *,
-        client: AsyncHTTPClient | None = None,
+        client: Any | None = None,
         provider: AIProvider | None = None,
         fallback_provider: AIProvider | None = None,
     ) -> None:
@@ -425,11 +424,7 @@ class AIAnalystService:
         self.client = client
         self.provider = provider or self._build_provider(settings.ai_model, fallback=False)
         self.fallback_provider = fallback_provider
-        if (
-            self.fallback_provider is None
-            and settings.ai_provider == "gemini"
-            and settings.ai_fallback_model != settings.ai_model
-        ):
+        if self.fallback_provider is None and settings.ai_fallback_model != settings.ai_model:
             self.fallback_provider = self._build_provider(
                 settings.ai_fallback_model,
                 fallback=True,
@@ -460,9 +455,18 @@ class AIAnalystService:
             base_url=self.settings.openai_base_url,
             model=model,
             timeout_seconds=self.settings.ai_request_timeout_seconds,
-            input_cost_per_million=self.settings.ai_input_cost_per_million,
-            output_cost_per_million=self.settings.ai_output_cost_per_million,
+            input_cost_per_million=(
+                self.settings.ai_fallback_input_cost_per_million
+                if fallback
+                else self.settings.ai_input_cost_per_million
+            ),
+            output_cost_per_million=(
+                self.settings.ai_fallback_output_cost_per_million
+                if fallback
+                else self.settings.ai_output_cost_per_million
+            ),
             client=self.client,
+            is_fallback=fallback,
         )
 
     def _configured_failure(self, error: Exception | str) -> AIReviewResult:
@@ -581,7 +585,11 @@ class AIAnalystService:
             if primary.error_code == LANGUAGE_MISMATCH
             else "PRIMARY_STRUCTURED_RETRY"
         )
-        if primary_validation_error and self.provider.name == "gemini":
+        should_retry_primary = bool(
+            primary_validation_error
+            and (self.provider.name == "gemini" or primary.error_code == LANGUAGE_MISMATCH)
+        )
+        if should_retry_primary:
             analysis, retry, retry_attempt = await self._call_and_validate(
                 provider=self.provider,
                 response_model=response_model,
@@ -601,8 +609,13 @@ class AIAnalystService:
         should_fallback = bool(
             self.fallback_provider is not None
             and (
-                primary_validation_error
-                or (len(attempts) == 1 and primary.status != "OK" and primary.retryable)
+                (self.provider.name == "gemini" and primary_validation_error)
+                or (
+                    len(attempts) == 1
+                    and primary.status != "OK"
+                    and primary.retryable
+                    and primary.error_code not in {INVALID_STRUCTURED_RESPONSE, LANGUAGE_MISMATCH}
+                )
             )
         )
         if should_fallback and self.fallback_provider is not None:

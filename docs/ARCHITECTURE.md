@@ -64,10 +64,10 @@ Backtest получает historical candles из того же repository layer
 | `app/quality.py` | Детерминированный PASS/WEAK/REJECT, confirmations/conflicts/regime compatibility | LLM reasoning |
 | `app/liquidity.py` | Read-only DB-first ADV20, fresh direction-aware RUB book depth, spread/volatility modifiers, rating and future AI snapshot | QualityGate, position sizing, lifecycle и HTTP-запрос на каждую карточку |
 | `app/liquidity_ux.py` | Компактный и подробный Telegram UX, консервативное округление и stale/closed-market disclosure | Торговую рекомендацию или «безопасный» размер позиции |
-| `app/ai_analyst.py` | Provider-neutral structured second opinion, bounded invalid-JSON/language validation retry, Russian-only user prose, Gemini fallback orchestration, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
-| `app/ai_providers.py` | Gemini/OpenAI HTTP contracts, exact model/usage/latency/error telemetry | QualityGate, scoring и решение о публикации |
-| `app/provider_health.py` | Gemini LISTED + structured generateContent CALLABLE startup/runtime health, DB telemetry summary, Telegram-safe diagnostics | Остановка ingestion/scheduler и вывод API key |
-| `app/on_demand_ai.py` | Явный Gemini review текущего candidate и отдельная telemetry | Перезапись historical verdict/snapshot или публикация идеи |
+| `app/ai_analyst.py` | Provider-neutral structured second opinion, bounded language validation retry, Russian-only user prose, conservative provider fallback orchestration, no-invention prompt, fail-closed result | Quant score и право спасать REJECT |
+| `app/ai_providers.py` | Official OpenAI SDK/Responses contract plus compatible Gemini HTTP contract, exact model/usage/latency/error telemetry | QualityGate, scoring и решение о публикации |
+| `app/provider_health.py` | Selected-provider structured CALLABLE startup/runtime health, DB telemetry summary, Telegram-safe diagnostics; Gemini also retains LISTED status | Остановка ingestion/scheduler и вывод API key |
+| `app/on_demand_ai.py` | Явный review текущего candidate через выбранный provider и отдельная telemetry | Перезапись historical verdict/snapshot или публикация идеи |
 | `app/experiments.py` | Frozen candidate cohorts, cooldown, AI telemetry link и rejected lifecycle | Пользовательскую публикацию |
 | `app/idea_repository.py` | Единственность открытой идеи, material updates, version/dedup events | Анализ рынка |
 | `app/idea_tracker.py` | Активация, TP/SL, expiry, missed entry | Генерацию новой идеи |

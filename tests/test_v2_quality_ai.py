@@ -87,6 +87,16 @@ def candidate(
     return result
 
 
+def gemini_settings(**overrides: object) -> Settings:
+    return Settings(
+        _env_file=None,
+        ai_provider="gemini",
+        ai_model="gemini-3.6-flash",
+        ai_fallback_model="gemini-flash-lite-latest",
+        **overrides,
+    )
+
+
 def test_quality_gate_passes_only_multi_factor_confirmation() -> None:
     result = QualityGate(Settings(_env_file=None)).evaluate(candidate())
 
@@ -263,19 +273,22 @@ def openai_payload(**overrides: object) -> dict[str, object]:
     }
 
 
-def test_gemini_is_the_default_provider() -> None:
+def test_openai_is_the_default_provider() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.ai_provider == "gemini"
-    assert settings.ai_model == "gemini-3.6-flash"
-    assert settings.ai_fallback_model == "gemini-flash-lite-latest"
+    assert settings.ai_provider == "openai"
+    assert settings.ai_model == "gpt-5.6-terra"
+    assert settings.ai_fallback_model == "gpt-5.6-luna"
     assert settings.ai_max_output_tokens == 4_096
-    assert settings.app_version == "0.7.2"
+    assert settings.app_version == "0.8.0"
+    assert settings.enable_legacy_strategy
+    assert not settings.intraday_v24_enabled
+    assert not settings.intraday_v24_shadow_enabled
 
 
 @pytest.mark.asyncio
 async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient(gemini_payload())
@@ -320,7 +333,7 @@ async def test_gemini_schema_compact_snapshot_and_usage_telemetry() -> None:
 
 @pytest.mark.asyncio
 async def test_fully_russian_ai_response_is_accepted_without_retry() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient(gemini_payload())
@@ -335,7 +348,7 @@ async def test_fully_russian_ai_response_is_accepted_without_retry() -> None:
 
 @pytest.mark.asyncio
 async def test_russian_response_with_technical_latin_tokens_is_accepted() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     payload = gemini_payload(
@@ -357,7 +370,7 @@ async def test_russian_response_with_technical_latin_tokens_is_accepted() -> Non
 
 @pytest.mark.asyncio
 async def test_english_ai_response_gets_one_russian_only_retry_and_succeeds() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     english = gemini_text_payload(json.dumps(english_analysis_body()))
@@ -380,7 +393,7 @@ async def test_english_ai_response_gets_one_russian_only_retry_and_succeeds() ->
 
 @pytest.mark.asyncio
 async def test_current_gemini_review_reuses_contract_and_includes_quality_context() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient(gemini_payload())
@@ -399,7 +412,7 @@ async def test_current_gemini_review_reuses_contract_and_includes_quality_contex
 
 @pytest.mark.asyncio
 async def test_truncated_ai_analysis_retries_primary_once_with_compact_prompt() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     truncated = gemini_text_payload(
@@ -452,7 +465,7 @@ async def test_invalid_structured_response_is_classified_then_retry_succeeds(
     first_text: str,
     expected_issue: str,
 ) -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient([gemini_text_payload(first_text), gemini_payload()])
@@ -470,7 +483,7 @@ async def test_invalid_structured_response_is_classified_then_retry_succeeds(
 
 @pytest.mark.asyncio
 async def test_primary_invalid_retry_invalid_then_fallback_succeeds_once() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     fallback = gemini_text_payload(
@@ -509,7 +522,7 @@ async def test_primary_invalid_retry_invalid_then_fallback_succeeds_once() -> No
 
 @pytest.mark.asyncio
 async def test_all_structured_attempts_invalid_fail_closed_wait_without_more_calls() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient(
@@ -543,7 +556,7 @@ async def test_all_structured_attempts_invalid_fail_closed_wait_without_more_cal
 async def test_gemini_timeout_or_rate_limit_uses_flash_lite_once(
     primary_failure: Exception | FakeResponse,
 ) -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     fallback_payload = gemini_payload()
@@ -563,7 +576,7 @@ async def test_gemini_timeout_or_rate_limit_uses_flash_lite_once(
 
 @pytest.mark.asyncio
 async def test_both_gemini_models_unavailable_is_not_reviewed_wait() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     client = FakeClient([httpx.ReadTimeout("primary"), httpx.ReadTimeout("fallback")])
@@ -580,30 +593,8 @@ async def test_both_gemini_models_unavailable_is_not_reviewed_wait() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_provider_remains_available() -> None:
-    settings = Settings(
-        _env_file=None,
-        ai_provider="openai",
-        ai_model="gpt-5-mini",
-        openai_api_key="test",
-    )
-    quant = candidate()
-    quality = QualityGate(settings).evaluate(quant)
-    client = FakeClient(openai_payload())
-
-    review = await AIAnalystService(settings, client=client).review(quant, quality)
-
-    assert review.approved
-    assert review.provider == "openai"
-    assert review.model == "gpt-5-mini-2026-01-01"
-    assert len(client.requests) == 1
-    request = client.requests[0]["json"]
-    assert request["text"]["format"]["strict"] is True
-
-
-@pytest.mark.asyncio
 async def test_ai_unavailable_fails_closed_without_http_request() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="")
+    settings = gemini_settings(gemini_api_key="")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
 
@@ -620,7 +611,7 @@ async def test_ai_unavailable_fails_closed_without_http_request() -> None:
 async def test_fallback_attempts_persist_exact_provider_model_and_usage() -> None:
     engine, factory = create_engine_and_session("sqlite+aiosqlite:///:memory:")
     await init_db(engine)
-    settings = Settings(_env_file=None, gemini_api_key="test")
+    settings = gemini_settings(gemini_api_key="test")
     quant = candidate()
     quality = QualityGate(settings).evaluate(quant)
     apply_quality_result(quant, quality, strategy_version=settings.strategy_version)

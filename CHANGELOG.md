@@ -4,6 +4,19 @@
 
 ### Added
 
+- V0.8.0 changes only the AI provider layer: OpenAI Responses API through the
+  official Python SDK is now the deployment default with `gpt-5.6-terra` and a
+  single retryable-error fallback to `gpt-5.6-luna`.
+- Added provider-neutral startup/runtime health, selected-provider Telegram
+  diagnostics, strict schema validation, exact per-attempt model/usage telemetry
+  and secret-safe OpenAI error classification. Gemini remains available and its
+  historical rows are untouched.
+- OpenAI failures remain fail-closed: authorization, permanent model/config and
+  invalid structured outputs never use fallback. QualityGate, scoring, strategy,
+  lifecycle, thresholds and existing database records are unchanged.
+- Production remains `INTRADAY_V24_ENABLED=false`, legacy remains enabled and
+  V2.4 shadow collection remains enabled.
+
 - V2.4/0.7.2 adds compact per-ticker pre-candidate diagnostics to the existing
   scan `JobRunState.details` payload. Each outcome records only ticker,
   D1/H1 directions, regime and detected setup/direction; no candles,

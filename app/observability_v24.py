@@ -22,7 +22,7 @@ from app.models import (
     JobRunState,
     ModelTradeJournal,
 )
-from app.provider_health import GeminiHealthMonitor
+from app.provider_health import AIHealthMonitor
 from app.risk_v24 import CostModelConfig, RiskBudgetRepository
 from app.v24_domain import (
     CalibrationStatus,
@@ -52,7 +52,8 @@ class V24RuntimeStatus:
     admission_policy_version: str | None
     calibration: CalibrationStatus
     kill_switch: KillSwitchStatus
-    gemini: str
+    ai_provider_name: str
+    ai_provider_status: str
     model_trade_count: int
     actual_trade_count: int
     ambiguous_execution_count: int
@@ -91,11 +92,11 @@ class V24ObservabilityService:
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
         *,
-        gemini_health: GeminiHealthMonitor | None = None,
+        ai_health: AIHealthMonitor | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
-        self.gemini_health = gemini_health
+        self.ai_health = ai_health
         self.journal_health = JournalHealthService(session_factory)
         self.kill_switch = KillSwitchService(session_factory)
         self.calibration = CalibrationService(session_factory)
@@ -157,9 +158,9 @@ class V24ObservabilityService:
             checked_at,
             admission is not None,
         )
-        gemini = (
-            self.gemini_health.last_report.api_status
-            if self.gemini_health is not None and self.gemini_health.last_report is not None
+        ai_provider_status = (
+            self.ai_health.last_report.api_status
+            if self.ai_health is not None and self.ai_health.last_report is not None
             else "NOT_CHECKED"
         )
         try:
@@ -253,7 +254,8 @@ class V24ObservabilityService:
             ),
             calibration=calibration_status,
             kill_switch=kill,
-            gemini=gemini,
+            ai_provider_name=self.settings.ai_provider,
+            ai_provider_status=ai_provider_status,
             model_trade_count=len(models),
             actual_trade_count=actual_count,
             ambiguous_execution_count=sum(item.ambiguous_execution for item in models),

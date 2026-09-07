@@ -126,7 +126,8 @@ async def test_context_keyboards_cover_actions_state_navigation_and_callback_lim
     assert "✅ Слежу за идеей" in all_labels
     assert "🏠 Главное меню" in all_labels
     assert "⬅️ Назад" in all_labels or "⬅️ К идеям" in all_labels
-    assert "🧠 Gemini vs Quant" in all_labels
+    assert "🧠 OpenAI vs Quant" in all_labels
+    assert "🧠 OpenAI" in all_labels
     assert "💧 Ликвидность" in all_labels
     assert "⬅️ Назад к идее" in all_labels
     for markup in markups:

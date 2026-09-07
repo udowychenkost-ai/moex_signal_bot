@@ -64,4 +64,4 @@ Metric tiers start at:
 
 These are centralized configurable starting heuristics, not claims of guaranteed
 execution quality. `LiquidityAssessment.ai_snapshot()` exposes optional future
-context fields, but V2.1.5 does not send them to Gemini.
+context fields, but V2.1.5 does not send them to the AI provider.

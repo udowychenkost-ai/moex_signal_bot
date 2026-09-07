@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
@@ -9,6 +10,7 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 import httpx
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,10 @@ class ProviderCallResult:
 
 
 @dataclass(frozen=True, slots=True)
-class GeminiHealthStatus:
+class ProviderHealthStatus:
     provider: str
     configured_model: str
-    model_listed: bool
+    model_listed: bool | None
     model_callable: bool
     api_reachable: bool
     status_code: int | None
@@ -55,9 +57,15 @@ class GeminiHealthStatus:
         return self.model_callable
 
 
+# Public compatibility name retained for the existing Gemini tests and integrations.
+GeminiHealthStatus = ProviderHealthStatus
+
+
 class AIProvider(Protocol):
     name: str
     model: str
+
+    async def check_health(self) -> ProviderHealthStatus: ...
 
     async def generate(
         self,
@@ -87,6 +95,65 @@ def _openai_response_text(payload: dict[str, Any]) -> str:
             if content.get("type") == "output_text" and isinstance(text, str):
                 return text
     raise ValueError("OpenAI response did not contain output_text")
+
+
+def _model_dump(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        result = model_dump(mode="json")
+        if isinstance(result, dict):
+            return result
+    raise ValueError("Provider response must be a JSON object")
+
+
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+"),
+    re.compile(r"(?i)([?&](?:key|api_key)=)[^&\s'\"]+"),
+    re.compile(r"(?i)(\b(?:api[_ -]?key|token)\s*[:=]\s*)[^\s,;]+"),
+)
+
+
+def sanitize_provider_error(error: Exception | str, *, secret: str = "") -> str:
+    """Bound provider errors and remove credentials before logs or persistence."""
+    message = str(error) or (type(error).__name__ if isinstance(error, Exception) else "ERROR")
+    if secret:
+        message = message.replace(secret, "***")
+    for pattern in _SECRET_PATTERNS:
+        message = pattern.sub(r"\1***", message)
+    return " ".join(message.split())[:1_000]
+
+
+def _openai_error(error: Exception) -> tuple[int | None, str, str, bool]:
+    status_code = getattr(error, "status_code", None)
+    status_code = int(status_code) if isinstance(status_code, int) else None
+    body = getattr(error, "body", None)
+    body = body if isinstance(body, dict) else {}
+    nested = body.get("error")
+    details = nested if isinstance(nested, dict) else body
+    raw_code = details.get("code") or details.get("type")
+    error_code = str(raw_code or "").strip().upper()
+    if isinstance(error, APITimeoutError):
+        error_code = "TIMEOUT"
+    elif isinstance(error, APIConnectionError):
+        error_code = "CONNECTION_ERROR"
+    elif status_code == 401:
+        error_code = "AUTHENTICATION_ERROR"
+    elif status_code == 403:
+        error_code = "PERMISSION_DENIED"
+    elif status_code == 404:
+        error_code = "MODEL_NOT_FOUND"
+    elif not error_code and status_code is not None:
+        error_code = f"HTTP_{status_code}"
+    elif not error_code:
+        error_code = "OPENAI_ERROR"
+    retryable = bool(
+        isinstance(error, (APITimeoutError, APIConnectionError))
+        or status_code in {408, 429}
+        or (status_code is not None and status_code >= 500)
+    )
+    return status_code, error_code, str(error), retryable
 
 
 def _gemini_response_text(payload: dict[str, Any]) -> str:
@@ -209,7 +276,8 @@ class OpenAIProvider:
         timeout_seconds: float,
         input_cost_per_million: float,
         output_cost_per_million: float,
-        client: AsyncHTTPClient | None = None,
+        client: Any | None = None,
+        is_fallback: bool = False,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -218,6 +286,79 @@ class OpenAIProvider:
         self.input_cost_per_million = input_cost_per_million
         self.output_cost_per_million = output_cost_per_million
         self.client = client
+        self.is_fallback = is_fallback
+        self.last_health: ProviderHealthStatus | None = None
+
+    def _client(self) -> Any:
+        return self.client or AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+            # The application owns the single bounded fallback decision. Hidden SDK
+            # retries would make telemetry and request counts misleading.
+            max_retries=0,
+        )
+
+    async def check_health(self) -> ProviderHealthStatus:
+        """Confirm that the configured model can complete a minimal Responses call."""
+        checked_at = datetime.now(UTC)
+        if not self.api_key:
+            result = ProviderHealthStatus(
+                provider=self.name,
+                configured_model=self.model,
+                model_listed=None,
+                model_callable=False,
+                api_reachable=False,
+                status_code=None,
+                error_code="MISSING_API_KEY",
+                error_message="OPENAI_API_KEY is not configured",
+                checked_at=checked_at,
+            )
+            self.last_health = result
+            return result
+
+        probe = await self.generate(
+            system_prompt="Return the requested structured result using only the supplied input.",
+            payload={"task": "provider_health_probe", "expected": {"ok": True}},
+            schema={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+            schema_name="provider_health_probe",
+            max_output_tokens=128,
+        )
+        callable_model = False
+        if probe.status == "OK":
+            try:
+                parsed = json.loads(probe.text)
+                callable_model = isinstance(parsed, dict) and parsed.get("ok") is True
+            except (json.JSONDecodeError, TypeError):
+                callable_model = False
+        result = ProviderHealthStatus(
+            provider=self.name,
+            configured_model=self.model,
+            model_listed=None,
+            model_callable=callable_model,
+            api_reachable=probe.status_code is not None,
+            status_code=probe.status_code,
+            error_code=(
+                probe.error_code
+                if probe.status != "OK"
+                else ("INVALID_HEALTH_RESPONSE" if not callable_model else "")
+            ),
+            error_message=(
+                probe.error
+                if probe.status != "OK"
+                else (
+                    "OpenAI health probe returned an invalid result" if not callable_model else ""
+                )
+            ),
+            checked_at=checked_at,
+        )
+        self.last_health = result
+        return result
 
     async def generate(
         self,
@@ -229,37 +370,42 @@ class OpenAIProvider:
         max_output_tokens: int,
     ) -> ProviderCallResult:
         if not self.api_key:
-            return self._error("OPENAI_API_KEY is not configured")
-        request = {
-            "model": self.model,
-            "max_output_tokens": max_output_tokens,
-            "instructions": system_prompt,
-            "input": json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False),
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-        }
+            return self._error(
+                "OPENAI_API_KEY is not configured",
+                error_code="MISSING_API_KEY",
+            )
         started = perf_counter()
         own_client = self.client is None
-        client: AsyncHTTPClient = self.client or httpx.AsyncClient(timeout=self.timeout_seconds)
+        client = self._client()
         try:
-            response = await client.post(
-                f"{self.base_url}/responses",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
+            response = await client.responses.create(
+                model=self.model,
+                max_output_tokens=max_output_tokens,
+                instructions=system_prompt,
+                input=json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False),
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    }
                 },
-                json=request,
+                # Candidate snapshots are not persisted by OpenAI and no tools (including
+                # web search) are enabled for this second-opinion request.
+                store=False,
             )
-            response.raise_for_status()
-            response_payload = response.json()
-            if not isinstance(response_payload, dict):
-                raise ValueError("OpenAI response must be a JSON object")
+            response_payload = _model_dump(response)
+            status = response_payload.get("status")
+            if status not in {None, "completed"}:
+                incomplete = response_payload.get("incomplete_details") or {}
+                reason = incomplete.get("reason") if isinstance(incomplete, dict) else status
+                return self._error(
+                    f"OpenAI response was not completed: {reason or status}",
+                    latency_ms=round((perf_counter() - started) * 1_000),
+                    status_code=200,
+                    error_code="INCOMPLETE_RESPONSE",
+                )
             usage = response_payload.get("usage") or {}
             usage = usage if isinstance(usage, dict) else {}
             input_tokens = int(usage.get("input_tokens") or 0)
@@ -278,36 +424,85 @@ class OpenAIProvider:
                 output_tokens=output_tokens,
                 estimated_cost_usd=round(cost, 8),
                 latency_ms=round((perf_counter() - started) * 1_000),
+                status_code=200,
                 usage=usage,
             )
-        except (httpx.HTTPError, TimeoutError, ValueError) as error:
-            retryable = isinstance(error, (httpx.TimeoutException, TimeoutError))
+        except (APIStatusError, APITimeoutError, APIConnectionError) as error:
+            status_code, error_code, message, retryable = _openai_error(error)
+            return self._error(
+                message,
+                latency_ms=round((perf_counter() - started) * 1_000),
+                status_code=status_code,
+                error_code=error_code,
+                retryable=retryable,
+            )
+        except (TimeoutError, httpx.TimeoutException) as error:
             return self._error(
                 error,
                 latency_ms=round((perf_counter() - started) * 1_000),
-                retryable=retryable,
+                error_code="TIMEOUT",
+                retryable=True,
+            )
+        except (httpx.NetworkError, ConnectionError) as error:
+            return self._error(
+                error,
+                latency_ms=round((perf_counter() - started) * 1_000),
+                error_code="CONNECTION_ERROR",
+                retryable=True,
+            )
+        except ValueError as error:
+            return self._error(
+                error,
+                latency_ms=round((perf_counter() - started) * 1_000),
+                error_code="INVALID_RESPONSE",
             )
         except Exception as error:
-            return self._error(error, latency_ms=round((perf_counter() - started) * 1_000))
+            # Test doubles and alternate transports may expose the same stable
+            # status_code/body attributes without subclassing the SDK exceptions.
+            status_code, error_code, message, retryable = _openai_error(error)
+            return self._error(
+                message,
+                latency_ms=round((perf_counter() - started) * 1_000),
+                status_code=status_code,
+                error_code=error_code,
+                retryable=retryable,
+            )
         finally:
-            if own_client and isinstance(client, httpx.AsyncClient):
-                await client.aclose()
+            if own_client:
+                await client.close()
 
     def _error(
         self,
         error: Exception | str,
         *,
         latency_ms: int = 0,
+        status_code: int | None = None,
+        error_code: str = "ERROR",
         retryable: bool = False,
     ) -> ProviderCallResult:
-        message = str(error) or type(error).__name__
+        message = sanitize_provider_error(error, secret=self.api_key)
+        logger.error(
+            "openai request failed model=%s status=%s error_code=%s fallback=%s",
+            self.model,
+            status_code if status_code is not None else error_code,
+            error_code,
+            str(self.is_fallback).lower(),
+        )
         return ProviderCallResult(
             provider=self.name,
             model=self.model,
             status="ERROR",
             latency_ms=latency_ms,
-            error=message[:2_000],
+            error=message,
+            status_code=status_code,
+            error_code=error_code,
+            model_unavailable=error_code in {"MODEL_NOT_FOUND", "MODEL_UNSUPPORTED"},
             retryable=retryable,
+            usage={
+                "status_code": status_code,
+                "error_code": error_code,
+                "error_message": message,
+            },
         )
 
 
@@ -612,7 +807,7 @@ class GeminiProvider:
         model_unavailable: bool = False,
         retryable: bool = False,
     ) -> ProviderCallResult:
-        message = str(error) or type(error).__name__
+        message = sanitize_provider_error(error, secret=self.api_key)
         log_status: int | str = status_code if status_code is not None else error_code
         logger.error(
             "gemini request failed model=%s status=%s error_code=%s fallback=%s",

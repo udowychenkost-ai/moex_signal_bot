@@ -248,7 +248,8 @@ def format_application_status(status: ApplicationStatus, *, timezone: str) -> st
         + ("AVAILABLE" if v24.external_context_ready else "DATA NOT AVAILABLE")
         + "</b>\n"
         + f"Alembic: <b>{escape(v24.journal.revision or 'UNKNOWN')}</b>\n"
-        + f"Gemini: <b>{escape(v24.gemini)}</b>\n"
+        + f"AI ({escape(v24.ai_provider_name.title())}): "
+        + f"<b>{escape(v24.ai_provider_status)}</b>\n"
         + f"Journal: <b>{'AVAILABLE' if v24.journal.available else 'ERROR'}</b>\n"
         + f"Data SLA: <b>{v24.data_sla.value}</b>\n"
         + f"Risk Budget: <b>{v24.risk_budget.value}</b>\n"

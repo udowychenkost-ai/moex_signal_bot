@@ -11,8 +11,8 @@ adversarial review, reproducibility and strategy version. Every mandatory item
 must be `PASS`; only calibration may be `NOT_REQUIRED` for a non-statistical
 classification.
 
-Gemini receives only verified structured evidence and may critique or summarize
-it. Gemini cannot change a hard-fail result, create a missing fact, supply a
+The selected AI provider receives only verified structured evidence and may critique or summarize
+it. AI cannot change a hard-fail result, create a missing fact, supply a
 probability or rescue a rejected candidate.
 
 ## Classification order

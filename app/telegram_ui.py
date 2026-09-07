@@ -425,7 +425,11 @@ def results_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def statistics_context_keyboard(period: str = "7", horizon: str = "all") -> InlineKeyboardMarkup:
+def statistics_context_keyboard(
+    period: str = "7",
+    horizon: str = "all",
+    ai_provider: str = "openai",
+) -> InlineKeyboardMarkup:
     def selected(label: str, value: str, current: str) -> str:
         return f"✅ {label}" if value == current else label
 
@@ -475,7 +479,9 @@ def statistics_context_keyboard(period: str = "7", horizon: str = "all") -> Inli
                     callback_data=f"stats_break:worst:{period}:{horizon}",
                 ),
                 InlineKeyboardButton(
-                    text="🧠 Gemini vs Quant",
+                    text=(
+                        "🧠 OpenAI vs Quant" if ai_provider == "openai" else "🧠 Gemini vs Quant"
+                    ),
                     callback_data=f"stats_break:ai:{period}:{horizon}",
                 ),
             ],
@@ -510,7 +516,8 @@ def market_context_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def status_context_keyboard() -> InlineKeyboardMarkup:
+def status_context_keyboard(ai_provider: str = "openai") -> InlineKeyboardMarkup:
+    provider_label = "OpenAI" if ai_provider == "openai" else "Gemini"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -518,7 +525,7 @@ def status_context_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📡 MOEX", callback_data="status:moex"),
             ],
             [
-                InlineKeyboardButton(text="🧠 Gemini", callback_data="status:gemini"),
+                InlineKeyboardButton(text=f"🧠 {provider_label}", callback_data="status:ai"),
                 InlineKeyboardButton(text="⏱ Scheduler", callback_data="status:scheduler"),
             ],
             [

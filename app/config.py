@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     data_freshness_limits_minutes: str = "5m:30,15m:60,1h:240,4h:1440,1d:5760,1w:14400"
     small_sample_threshold: int = Field(default=30, ge=1, le=10_000)
     telegram_admin_chat_ids: str = ""
-    app_version: str = "0.7.2"
+    app_version: str = "0.8.0"
     git_commit: str = "unknown"
     intraday_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
     swing_observation_mode: Literal["RESEARCH", "PAPER"] = "RESEARCH"
@@ -214,19 +214,19 @@ class Settings(BaseSettings):
 
     ai_filter_enabled: bool = True
     ai_allow_unreviewed_fallback: bool = False
-    ai_provider: Literal["gemini", "openai"] = "gemini"
+    ai_provider: Literal["gemini", "openai"] = "openai"
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
-    ai_model: str = "gemini-3.6-flash"
-    ai_fallback_model: str = "gemini-flash-lite-latest"
+    ai_model: str = "gpt-5.6-terra"
+    ai_fallback_model: str = "gpt-5.6-luna"
     ai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     ai_max_output_tokens: int = Field(default=4_096, ge=1_024, le=8_192)
-    ai_input_cost_per_million: float = Field(default=0.30, ge=0)
-    ai_output_cost_per_million: float = Field(default=2.50, ge=0)
-    ai_fallback_input_cost_per_million: float = Field(default=0.18, ge=0)
-    ai_fallback_output_cost_per_million: float = Field(default=0.72, ge=0)
+    ai_input_cost_per_million: float = Field(default=2.00, ge=0)
+    ai_output_cost_per_million: float = Field(default=12.00, ge=0)
+    ai_fallback_input_cost_per_million: float = Field(default=0.20, ge=0)
+    ai_fallback_output_cost_per_million: float = Field(default=1.20, ge=0)
 
     @field_validator("default_timeframe")
     @classmethod

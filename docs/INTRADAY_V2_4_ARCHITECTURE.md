@@ -15,7 +15,7 @@ MOEX ISS ingestion (1d, 1h, 15m, 5m; optional verified 1m)
   -> deterministic MTF technical / market regime / setup
   -> entry / path-to-TP / execution / cost / liquidity / risk
   -> calibration + statistical admission
-  -> Gemini review only after deterministic pre-gates are clear
+  -> selected AI provider review only after deterministic pre-gates are clear
   -> adversarial check -> all-mandatory FinalAudit
   -> one V2.4 classification
   -> immutable IdeaJournal + DecisionSnapshotV24
@@ -56,7 +56,7 @@ granting publication eligibility.
 ## Fail-closed invariants
 
 - Missing configuration is a typed `NOT_CONFIGURED`, never a plausible zero.
-- Missing market facts are `DATA_NOT_AVAILABLE`/`NULL`; Gemini cannot supply
+- Missing market facts are `DATA_NOT_AVAILABLE`/`NULL`; AI cannot supply
   them.
 - Data SLA not configured or not passing blocks immediate action.
 - Public best bid/offer without quantity is not full L2 depth.
